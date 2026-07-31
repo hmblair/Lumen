@@ -52,15 +52,30 @@ swift run
 A lightbulb icon appears in the menu bar (no Dock icon — the app runs as an
 accessory). Click it for the dropdown.
 
-## Build a standalone binary
+## Run in the background (no terminal)
+
+Package the app as a `.app` bundle and launch it detached:
 
 ```sh
-swift build -c release
-open .build/release/HueBar   # or copy it wherever you like
+make app       # builds .build/HueBar.app (release + Info.plist + ad-hoc sign)
+make install   # copies it to /Applications
+open /Applications/HueBar.app
 ```
 
-To launch at login, add the built binary in System Settings → General →
-Login Items, or wrap it in a `.app` bundle.
+`Resources/Info.plist` sets `LSUIElement`, so it runs as a background agent — no
+Dock icon, no terminal. To start it automatically: System Settings → General →
+Login Items → add `/Applications/HueBar.app`.
+
+### Make targets
+
+| Target | Does |
+|--------|------|
+| `make` / `make build` | debug build |
+| `make release` | optimized build |
+| `make run` | run in the terminal (dev) |
+| `make app` (alias `bundle`) | build the `.app` bundle |
+| `make install` | copy the bundle to `/Applications` |
+| `make clean` | remove build artifacts |
 
 ## UI
 
