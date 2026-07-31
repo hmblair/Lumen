@@ -96,8 +96,6 @@ public struct HueControlPanel: View {
         }
         .disabled(!client.isReachable)
         .opacity(client.isReachable ? 1 : 0.4)
-
-        if onQuit != nil { footer }
     }
 
     // MARK: - Bridge configuration
@@ -112,6 +110,16 @@ public struct HueControlPanel: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
             HStack {
+                if let onQuit {
+                    Button { onQuit() } label: {
+                        Image(systemName: "power.circle")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.red, Color.primary)
+                            .font(.title2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Quit")
+                }
                 Spacer()
                 Button("Save", action: saveBridge)
                     .buttonStyle(.borderedProminent)
@@ -253,14 +261,6 @@ public struct HueControlPanel: View {
             }
         }
         .disabled(!hasSelection)
-    }
-
-    private var footer: some View {
-        HStack {
-            Spacer()
-            Button("Quit") { onQuit?() }
-                .buttonStyle(.borderless)
-        }
     }
 
     private func toggleSelection(_ id: String) {
