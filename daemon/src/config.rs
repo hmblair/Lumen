@@ -64,3 +64,21 @@ pub fn load() -> Config {
 
     Config { api_key, bridge_ip }
 }
+
+/// Persist a changed BRIDGE_IP (None = auto-discovery) back to config.env,
+/// leaving every other line — API_KEY, comments — untouched.
+pub fn persist_bridge_ip(ip: Option<&str>) {
+    let path = config_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("BRIDGE_IP"))
+        .map(str::to_string)
+        .collect();
+    if let Some(ip) = ip {
+        lines.push(format!("BRIDGE_IP=\"{ip}\""));
+    }
+    if let Err(e) = std::fs::write(&path, lines.join("\n") + "\n") {
+        tracing::warn!("Failed to persist BRIDGE_IP to {}: {e}", path.display());
+    }
+}

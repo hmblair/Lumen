@@ -27,7 +27,7 @@ async fn main() {
     let data_dir = config::config_path().parent().expect("config has a dir").to_path_buf();
 
     let bridge = Arc::new(bridge::Bridge::new(config));
-    let cache = Arc::new(cache::LightCache::new(bridge));
+    let cache = Arc::new(cache::LightCache::new(Arc::clone(&bridge)));
     cache.spawn_poll_loop();
 
     let scenes = Arc::new(store::Store::load(data_dir.join("scenes.json"), Default::default()));
@@ -37,7 +37,7 @@ async fn main() {
     let runner = Arc::new(runner::SceneRunner::new(Arc::clone(&cache)));
     scheduler::spawn_scheduler(Arc::clone(&schedules), Arc::clone(&scenes), Arc::clone(&runner));
 
-    let state = api::AppState { cache, runner, scenes, schedules };
+    let state = api::AppState { bridge, cache, runner, scenes, schedules };
 
     let port = std::env::var("LUMEN_DAEMON_PORT")
         .ok()

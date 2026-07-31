@@ -67,6 +67,15 @@ public struct Schedule: Codable, Hashable {
     }
 }
 
+/// The daemon's bridge configuration (GET /config): the explicit address
+/// override (nil = mDNS auto-discovery), the address currently in use, and
+/// whether the bridge is answering.
+public struct BridgeConfig: Codable, Hashable {
+    public let bridgeIP: String?
+    public let activeIP: String?
+    public let bridgeReachable: Bool
+}
+
 /// The run reported by GET /status while a scene is active.
 public struct RunningInfo: Codable, Hashable {
     public let scene: String
@@ -169,6 +178,27 @@ extension LightController {
                 _ = await send("PUT", "lights/\(light.id)", body: data)
             }
         }
+    }
+
+    // MARK: - Bridge configuration
+
+    public func loadBridgeConfig() async {
+        if let data = await get("config"),
+           let config = try? JSONDecoder().decode(BridgeConfig.self, from: data) {
+            bridgeConfig = config
+        }
+    }
+
+    /// Set (or clear, with nil/empty) the bridge address override. The daemon
+    /// probes the address before committing; returns its error message on
+    /// refusal, nil on success.
+    @discardableResult
+    public func setBridgeIP(_ ip: String?) async -> String? {
+        let body: [String: Any] = ["bridgeIP": ip.flatMap { $0.isEmpty ? nil : $0 } as Any]
+        let data = try? JSONSerialization.data(withJSONObject: body)
+        let error = await send("PUT", "config", body: data)
+        await loadBridgeConfig()
+        return error
     }
 
     // MARK: - Plumbing

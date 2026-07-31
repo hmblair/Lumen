@@ -32,6 +32,8 @@ public struct ControlPanel: View {
     @State private var isSeeding = false
 
     @State private var urlText = ""
+    @State private var bridgeIPText = ""
+    @State private var bridgeStatus: String?
 
     /// Single source of truth for navigation — one current screen, so
     /// contradictory combinations (an open editor under a closed section)
@@ -214,6 +216,9 @@ public struct ControlPanel: View {
                 .overlay(alignment: .trailing) {
                     urlStatusIcon.padding(.trailing, 6)
                 }
+            if controller.isConfigured {
+                bridgeSetup
+            }
             if let loginItem {
                 Toggle("Launch at login", isOn: Binding(
                     get: loginItem.isEnabled,
@@ -234,6 +239,47 @@ public struct ControlPanel: View {
             }
         }
         .onAppear(perform: checkURL)
+    }
+
+    /// The daemon's bridge address: a status line (in-use address, auto vs
+    /// manual, reachability) and an override field. Empty = mDNS discovery.
+    private var bridgeSetup: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("HUE BRIDGE").font(.caption).foregroundStyle(.secondary)
+            if let config = controller.bridgeConfig {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(config.bridgeReachable ? Color.green : Color.orange)
+                        .frame(width: 7, height: 7)
+                    Text("\(config.activeIP ?? "searching…") · \(config.bridgeIP == nil ? "auto" : "manual")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("auto (mDNS discovery)", text: $bridgeIPText)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .onSubmit { applyBridgeIP() }
+                Button("Apply") { applyBridgeIP() }
+                    .controlSize(.small)
+            }
+            if let bridgeStatus {
+                Text(bridgeStatus).font(.caption2).foregroundStyle(.orange)
+            }
+        }
+        .task {
+            await controller.loadBridgeConfig()
+            bridgeIPText = controller.bridgeConfig?.bridgeIP ?? ""
+        }
+    }
+
+    private func applyBridgeIP() {
+        let trimmed = bridgeIPText.trimmingCharacters(in: .whitespaces)
+        bridgeStatus = nil
+        Task {
+            bridgeStatus = await controller.setBridgeIP(trimmed.isEmpty ? nil : trimmed)
+        }
     }
 
     @ViewBuilder private var urlStatusIcon: some View {

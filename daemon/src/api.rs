@@ -29,6 +29,13 @@
 //!                              started, ends}}
 //!   POST /stop             -> {"stopped": name | null}
 //!
+//! Config:
+//!   GET /config            -> {"bridgeIP": override | null, "activeIP":
+//!                              in-use address | null, "bridgeReachable"}
+//!   PUT /config            <- {"bridgeIP": "10.0.0.5" | null} — null/empty
+//!                              = auto (mDNS); probed before committing, then
+//!                              persisted to config.env
+//!
 //! Author: Hamish M. Blair <hmblair@stanford.edu>
 
 use std::sync::Arc;
@@ -41,7 +48,7 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 use serde_json::{json, Value};
 
-use crate::bridge::StateUpdate;
+use crate::bridge::{Bridge, StateUpdate};
 use crate::cache::LightCache;
 use crate::runner::SceneRunner;
 use crate::scenes::Scene;
@@ -54,6 +61,7 @@ type ApiResponse = (StatusCode, Json<Value>);
 
 #[derive(Clone)]
 pub struct AppState {
+    pub bridge: Arc<Bridge>,
     pub cache: Arc<LightCache>,
     pub runner: Arc<SceneRunner>,
     pub scenes: Arc<Store<Scene>>,
@@ -73,6 +81,8 @@ pub fn router(state: AppState) -> Router {
         .route("/schedules/{name}", delete(delete_schedule))
         .route("/status", get(get_status))
         .route("/stop", post(stop))
+        .route("/config", get(get_config))
+        .route("/config", put(put_config))
         .with_state(state)
 }
 
@@ -244,6 +254,39 @@ async fn get_status(State(state): State<AppState>) -> ApiResponse {
 
 async fn stop(State(state): State<AppState>) -> ApiResponse {
     (StatusCode::OK, Json(json!({ "stopped": state.runner.stop().await })))
+}
+
+// MARK: config
+
+async fn get_config(State(state): State<AppState>) -> ApiResponse {
+    let (configured, active) = state.bridge.ip_state().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "bridgeIP": configured,
+            "activeIP": active,
+            "bridgeReachable": state.cache.snapshot().await.is_some(),
+        })),
+    )
+}
+
+async fn put_config(State(state): State<AppState>, body: Bytes) -> ApiResponse {
+    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(&body) else {
+        return error(StatusCode::BAD_REQUEST, "expected a JSON object");
+    };
+    if fields.keys().any(|k| k != "bridgeIP") {
+        return error(StatusCode::BAD_REQUEST, "the only settable key is 'bridgeIP'");
+    }
+    let ip = match fields.get("bridgeIP") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.trim().is_empty() => None,
+        Some(Value::String(s)) => Some(s.trim().to_string()),
+        Some(_) => return error(StatusCode::BAD_REQUEST, "bridgeIP must be a string or null"),
+    };
+    match state.bridge.set_configured_ip(ip).await {
+        Ok(()) => ok(),
+        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
+    }
 }
 
 // MARK: helpers

@@ -17,7 +17,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::config::Config;
+use crate::config::{self, Config};
 
 const MDNS_SERVICE: &str = "_hue._tcp.local.";
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -56,12 +56,19 @@ pub struct StateUpdate {
     pub transition: Option<f64>,
 }
 
+/// The bridge addressing state: `configured` is the explicit override from
+/// config.env (None = auto-discover via mDNS); `active` is the address
+/// currently in use (discovered or configured).
+struct IpState {
+    configured: Option<String>,
+    active: Option<String>,
+}
+
 pub struct Bridge {
     api_key: String,
-    configured_ip: Option<String>,
     client: reqwest::Client,
-    /// Cached bridge IP; also serializes discovery, like the Python lock.
-    ip: Mutex<Option<String>>,
+    /// Also serializes discovery, like the Python lock.
+    state: Mutex<IpState>,
 }
 
 impl Bridge {
@@ -75,10 +82,39 @@ impl Bridge {
             .expect("reqwest client");
         Bridge {
             api_key: config.api_key,
-            configured_ip: config.bridge_ip,
             client,
-            ip: Mutex::new(None),
+            state: Mutex::new(IpState { configured: config.bridge_ip, active: None }),
         }
+    }
+
+    /// (configured override, address currently in use).
+    pub async fn ip_state(&self) -> (Option<String>, Option<String>) {
+        let state = self.state.lock().await;
+        (state.configured.clone(), state.active.clone())
+    }
+
+    /// Change the configured bridge address. Some(ip) is probed before being
+    /// committed (a typo shouldn't strand the daemon); None returns to mDNS
+    /// auto-discovery. Persisted to config.env on success.
+    pub async fn set_configured_ip(&self, ip: Option<String>) -> Result<(), BridgeError> {
+        if let Some(ip) = &ip {
+            let url = format!("https://{ip}/api/{}/lights", self.api_key);
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .and_then(|r| r.error_for_status())
+                // The reqwest error's Display includes the full URL — and with
+                // it the API key — so don't echo it to clients.
+                .map_err(|_| BridgeError(format!("no Hue bridge answered at {ip}")))?;
+        }
+        let mut state = self.state.lock().await;
+        state.configured = ip.clone();
+        // None clears the active address too, forcing rediscovery next use.
+        state.active = ip.clone();
+        config::persist_bridge_ip(ip.as_deref());
+        info!("Bridge address set to {}", ip.as_deref().unwrap_or("auto (mDNS)"));
+        Ok(())
     }
 
     /// All lights in normalized form. Errors when the bridge is unreachable.
@@ -146,21 +182,21 @@ impl Bridge {
         req.send().await
     }
 
-    /// The cached bridge IP, resolving it on first use: the configured value
+    /// The active bridge IP, resolving it on first use: the configured value
     /// if set, otherwise mDNS discovery.
     async fn current_ip(&self) -> Result<String, BridgeError> {
-        let mut guard = self.ip.lock().await;
-        if let Some(ip) = guard.as_ref() {
+        let mut state = self.state.lock().await;
+        if let Some(ip) = state.active.as_ref() {
             return Ok(ip.clone());
         }
-        if let Some(ip) = &self.configured_ip {
-            *guard = Some(ip.clone());
-            return Ok(ip.clone());
+        if let Some(ip) = state.configured.clone() {
+            state.active = Some(ip.clone());
+            return Ok(ip);
         }
         match discover().await {
             Some(ip) => {
                 info!("Discovered Hue bridge at {ip} via mDNS");
-                *guard = Some(ip.clone());
+                state.active = Some(ip.clone());
                 Ok(ip)
             }
             None => Err(BridgeError(
@@ -169,20 +205,20 @@ impl Bridge {
         }
     }
 
-    /// Re-run mDNS and update the cached IP if a different one is found.
-    /// Returns true if the cached IP changed. Runs even with a configured
-    /// BRIDGE_IP, matching the Python daemon: a live discovery beats a stale
-    /// config value when the configured address stops answering.
+    /// Re-run mDNS and update the active IP if a different one is found.
+    /// Returns true if it changed. Runs even with a configured BRIDGE_IP,
+    /// matching the Python daemon: a live discovery beats a stale config
+    /// value when the configured address stops answering.
     async fn rediscover(&self) -> bool {
-        let mut guard = self.ip.lock().await;
-        let prev = guard.clone();
+        let mut state = self.state.lock().await;
+        let prev = state.active.clone();
         match discover().await {
             Some(new_ip) if prev.as_deref() != Some(new_ip.as_str()) => {
                 info!(
                     "Bridge IP changed: {} -> {new_ip}",
                     prev.as_deref().unwrap_or("none")
                 );
-                *guard = Some(new_ip);
+                state.active = Some(new_ip);
                 true
             }
             Some(_) => false,

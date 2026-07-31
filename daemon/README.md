@@ -30,6 +30,8 @@ through synchronously and patch the cache optimistically.
 | `DELETE /schedules/<name>` | |
 | `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
 | `POST /stop` | `{"stopped": name \| null}` — release manual control |
+| `GET /config` | `{"bridgeIP": override \| null, "activeIP", "bridgeReachable"}` |
+| `PUT /config` | `{"bridgeIP": "10.0.0.5" \| null}` — null = auto (mDNS); probed before committing, persisted to config.env |
 
 `level` is device brightness independent of `on`; clients express "off" as
 `{"on": false}` (level 0 is never sent to /lights).
@@ -61,6 +63,9 @@ API_KEY="your-hue-api-key"
 # BRIDGE_IP="10.0.0.5"   # optional; auto-discovered via mDNS if unset,
                          # and rediscovered when the cached IP stops answering
 ```
+
+`BRIDGE_IP` is also settable at runtime via `PUT /config` (the app's settings
+screen) — changes are probed first and written back to this file.
 
 `LUMEN_DAEMON_PORT` overrides the default port 8600. The port is internal to
 the box: only the systemd unit and Caddy's `reverse_proxy` line ever see it.

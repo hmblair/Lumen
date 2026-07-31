@@ -71,6 +71,10 @@ public final class LightController: ObservableObject {
     @Published public internal(set) var scenes: [String: Scene] = [:]
     @Published public internal(set) var schedules: [String: Schedule] = [:]
 
+    /// The daemon's bridge configuration, loaded on demand for the settings
+    /// screen (set internally by the scenes extension).
+    @Published public internal(set) var bridgeConfig: BridgeConfig?
+
     /// Daemon base URL (e.g. https://lumen.hmblair.com), persisted to
     /// `UserDefaults`. `nil` until the user configures it — there is no
     /// built-in default. The key is new as of the daemon migration, so users
