@@ -125,6 +125,9 @@ public struct ControlPanel: View {
             // moment a valid URL auto-applies; the user leaves via the gear.
             if !controller.isConfigured { screen = .settings }
             seedFromLiveState()
+            // Groups feed the chips on the main screen (scenes/schedules
+            // screens reload the library themselves on open).
+            Task { await controller.loadLibrary() }
         }
         .onChange(of: controller.selection) { _ in seedFromLiveState() }
         // Reseed only when the controller adopts fresh state (first load or
@@ -171,6 +174,10 @@ public struct ControlPanel: View {
         // are unreachable (writes would silently fail) or while a scene owns
         // them (writes would 409). The banner, header, and Quit stay usable.
         Group {
+            // Group UI insertion point (option A: chips). Switching to a
+            // different treatment (e.g. grouped sections) replaces this one
+            // component.
+            GroupChipsView(controller: controller)
             lightPicker
             Divider()
 

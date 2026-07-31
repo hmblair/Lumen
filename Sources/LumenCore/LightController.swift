@@ -67,10 +67,12 @@ public final class LightController: ObservableObject {
     /// "scene running" banner and greys out manual control.
     @Published public private(set) var running: RunningInfo?
 
-    /// Scene and schedule libraries, loaded via loadLibrary() on panel open
-    /// and after mutations (set internally by the scenes extension).
+    /// Scene, schedule, and group libraries, loaded via loadLibrary() on
+    /// panel open and after mutations (set internally by the scenes
+    /// extension).
     @Published public internal(set) var scenes: [String: Scene] = [:]
     @Published public internal(set) var schedules: [String: Schedule] = [:]
+    @Published public internal(set) var groups: [String: LightGroup] = [:]
 
     /// The daemon's bridge configuration, loaded on demand for the settings
     /// screen (set internally by the scenes extension).
@@ -352,6 +354,18 @@ public final class LightController: ObservableObject {
     private func send(_ body: [String: Any], to ids: [String]) async {
         guard !ids.isEmpty, let baseURL else { return }
         let timeout = requestTimeout
+        // When the targets are exactly a group, one atomic group command
+        // beats the per-light fan-out: the lights change in lockstep and the
+        // bridge does less work.
+        if let groupID = groupID(matching: ids) {
+            var req = URLRequest(url: baseURL.appendingPathComponent("groups/\(groupID)"))
+            req.httpMethod = "PUT"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            req.timeoutInterval = timeout
+            _ = try? await session.data(for: req)
+            return
+        }
         await withTaskGroup(of: Void.self) { group in
             for id in ids {
                 group.addTask { [baseURL, session] in
@@ -365,5 +379,11 @@ public final class LightController: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The id of a group whose membership is exactly `ids`, if any.
+    private func groupID(matching ids: [String]) -> String? {
+        let target = Set(ids)
+        return groups.first { !$0.value.lights.isEmpty && Set($0.value.lights) == target }?.key
     }
 }

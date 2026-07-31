@@ -325,10 +325,37 @@ struct SceneEditorView: View {
                 }
                 .buttonStyle(.plain)
             }
+            if !controller.groups.isEmpty {
+                // One click puts a whole group on the selected curve —
+                // "this curve drives room x", and another group on another
+                // curve covers scenes spanning several rooms.
+                HStack(spacing: 4) {
+                    ForEach(controller.groups.sorted(by: { $0.value.name < $1.value.name }),
+                            id: \.key) { _, group in
+                        Button(group.name) {
+                            for lightID in group.lights {
+                                assignLight(lightID)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                        .help("Put this group's lights on the selected curve")
+                    }
+                }
+            }
             Text("Unchecked lights are left alone.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    /// Move a light onto the selected curve (idempotent, unlike toggling).
+    private func assignLight(_ lightID: String) {
+        guard draft.groups.indices.contains(draft.selectedGroup) else { return }
+        for index in draft.groups.indices {
+            draft.groups[index].lights.remove(lightID)
+        }
+        draft.groups[draft.selectedGroup].lights.insert(lightID)
     }
 
     private func groupIndex(of lightID: String) -> Int? {

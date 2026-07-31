@@ -67,6 +67,19 @@ public struct Schedule: Codable, Hashable {
     }
 }
 
+/// A light group. Groups live on the bridge (like names), so the vendor
+/// ecosystem sees the same membership. Named LightGroup to avoid colliding
+/// with SwiftUI.Group.
+public struct LightGroup: Codable, Hashable {
+    public var name: String
+    public var lights: [String]
+
+    public init(name: String, lights: [String]) {
+        self.name = name
+        self.lights = lights
+    }
+}
+
 /// The daemon's bridge configuration (GET /config): the explicit address
 /// override (nil = mDNS auto-discovery), the address currently in use, and
 /// whether the bridge is answering.
@@ -91,8 +104,8 @@ extension LightController {
 
     // MARK: - Library (scenes + schedules)
 
-    /// Fetch scenes and schedules. Called when the panel opens and after
-    /// mutations; not part of the 1 s poll.
+    /// Fetch scenes, schedules, and groups. Called when the panel opens and
+    /// after mutations; not part of the 1 s poll.
     public func loadLibrary() async {
         if let data = await get("scenes"),
            let response = try? JSONDecoder().decode([String: [String: Scene]].self, from: data) {
@@ -102,6 +115,41 @@ extension LightController {
            let response = try? JSONDecoder().decode([String: [String: Schedule]].self, from: data) {
             schedules = response["schedules"] ?? [:]
         }
+        if let data = await get("groups"),
+           let response = try? JSONDecoder().decode([String: [String: LightGroup]].self, from: data) {
+            groups = response["groups"] ?? [:]
+        }
+    }
+
+    // MARK: - Groups
+
+    /// Create a bridge group from the given lights; returns the daemon's
+    /// error or nil.
+    @discardableResult
+    public func createGroup(named name: String, lights: [String]) async -> String? {
+        let body = try? JSONSerialization.data(withJSONObject: ["name": name, "lights": lights])
+        let error = await send("POST", "groups", body: body)
+        await loadLibrary()
+        return error
+    }
+
+    /// Update a group's name and/or membership (nil = leave unchanged).
+    @discardableResult
+    public func updateGroup(id: String, name: String? = nil, lights: [String]? = nil) async -> String? {
+        var fields: [String: Any] = [:]
+        if let name { fields["name"] = name }
+        if let lights { fields["lights"] = lights }
+        let body = try? JSONSerialization.data(withJSONObject: fields)
+        let error = await send("PUT", "groups/\(id)", body: body)
+        await loadLibrary()
+        return error
+    }
+
+    @discardableResult
+    public func deleteGroup(id: String) async -> String? {
+        let error = await send("DELETE", "groups/\(id)")
+        await loadLibrary()
+        return error
     }
 
     /// Upsert; returns an error message, or nil on success.
