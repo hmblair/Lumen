@@ -165,6 +165,19 @@ extension LightController {
         }
     }
 
+    /// Rename a light. The name lives on the bridge, so every client — the
+    /// vendor's app included — sees it. Optimistic locally, guarded against
+    /// poll clobber like any write; returns the daemon's error or nil.
+    @discardableResult
+    public func renameLight(id: String, to name: String) async -> String? {
+        markWritten([id])
+        if let index = lights.firstIndex(where: { $0.id == id }) {
+            lights[index].name = name
+        }
+        let body = try? JSONSerialization.data(withJSONObject: ["name": name])
+        return await send("PUT", "lights/\(id)", body: body)
+    }
+
     /// Put lights back to a previously captured state — full state including
     /// power and the stored color of lights that were off. Used to undo the
     /// editor's temporary scrub/preview writes.

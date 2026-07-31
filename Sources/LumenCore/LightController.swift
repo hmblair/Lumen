@@ -48,7 +48,7 @@ func hueDistance(_ a: Double, _ b: Double) -> Double {
 
 @MainActor
 public final class LightController: ObservableObject {
-    @Published public private(set) var lights: [Light] = []
+    @Published public internal(set) var lights: [Light] = []
     @Published public var selection: Set<String> = []
     @Published public private(set) var lastError: String?
 

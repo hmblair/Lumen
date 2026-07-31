@@ -142,6 +142,17 @@ impl Bridge {
         Ok(())
     }
 
+    /// Rename a light. Names live on the light resource (not /state) and are
+    /// stored by the bridge itself, so every client — including the vendor's
+    /// own app — sees the same name.
+    pub async fn rename_light(&self, light_id: &str, name: &str) -> Result<(), BridgeError> {
+        let path = format!("/lights/{light_id}");
+        self.request(reqwest::Method::PUT, &path, Some(json!({ "name": name })))
+            .await
+            .map_err(|e| BridgeError(format!("rename of light {light_id} failed: {e}")))?;
+        Ok(())
+    }
+
     /// Issue a bridge request; on a connection error, rediscover and retry once.
     async fn request(
         &self,

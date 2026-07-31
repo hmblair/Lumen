@@ -77,6 +77,21 @@ impl LightCache {
         Ok(())
     }
 
+    /// Rename a light on the bridge, patching the cache like a state write.
+    pub async fn rename(&self, light_id: &str, name: &str) -> Result<(), BridgeError> {
+        self.bridge.rename_light(light_id, name).await?;
+        {
+            let mut guard = self.inner.write().await;
+            if let Some((lights, _)) = guard.as_mut() {
+                if let Some(light) = lights.iter_mut().find(|l| l.id == light_id) {
+                    light.name = name.to_string();
+                }
+            }
+        }
+        self.written.lock().await.insert(light_id.to_string(), Instant::now());
+        Ok(())
+    }
+
     /// Apply one update to several lights (all cached lights when `targets`
     /// is empty). Used by effects; per-light failures are logged and skipped
     /// so one unreachable lamp doesn't stall a running effect.

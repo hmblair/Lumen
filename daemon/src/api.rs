@@ -5,7 +5,9 @@
 //!                              level, reachable}, ...]}
 //!                             502 when the bridge is unreachable, so clients'
 //!                             reachability logic sees a failed poll.
-//!   PUT /lights/{id}       <- any subset of {on, hue, saturation, level}
+//!   PUT /lights/{id}       <- any subset of {on, hue, saturation, level,
+//!                             name} — name renames the light on the bridge
+//!                             (not arbitrated: it isn't light state)
 //!                             200 {"ok": true} | 400 bad body | 404 unknown
 //!                             light | 409 a running scene owns this light |
 //!                             502 bridge
@@ -55,7 +57,7 @@ use crate::scenes::Scene;
 use crate::scheduler::Schedule;
 use crate::store::Store;
 
-const ALLOWED_KEYS: [&str; 4] = ["on", "hue", "saturation", "level"];
+const ALLOWED_KEYS: [&str; 5] = ["on", "hue", "saturation", "level", "name"];
 
 type ApiResponse = (StatusCode, Json<Value>);
 
@@ -116,11 +118,22 @@ async fn put_light(
     }
 
     let mut update = StateUpdate::default();
+    let mut new_name: Option<String> = None;
     for (key, value) in &fields {
         match key.as_str() {
             "on" => match value.as_bool() {
                 Some(on) => update.on = Some(on),
                 None => return bad_value(key),
+            },
+            "name" => match value.as_str().map(str::trim) {
+                // 32 chars is the bridge's own limit.
+                Some(name) if !name.is_empty() && name.chars().count() <= 32 => {
+                    new_name = Some(name.to_string());
+                }
+                _ => return error(
+                    StatusCode::BAD_REQUEST,
+                    "name must be a non-empty string of at most 32 characters",
+                ),
             },
             _ => match value.as_f64() {
                 Some(number) => match key.as_str() {
@@ -139,18 +152,31 @@ async fn put_light(
         }
     }
 
-    // Schedule-wins arbitration: a running scene owns its lights.
-    if let Some(scene) = state.runner.owner_of(&light_id).await {
-        return error(
-            StatusCode::CONFLICT,
-            &format!("scene '{scene}' is running on this light; POST /stop to take manual control"),
-        );
+    // Schedule-wins arbitration: a running scene owns its lights' *state*.
+    // A rename isn't state, so it passes — but a mixed request is refused
+    // whole rather than half-applied.
+    let has_state = update.on.is_some() || update.hue.is_some()
+        || update.saturation.is_some() || update.level.is_some();
+    if has_state {
+        if let Some(scene) = state.runner.owner_of(&light_id).await {
+            return error(
+                StatusCode::CONFLICT,
+                &format!("scene '{scene}' is running on this light; POST /stop to take manual control"),
+            );
+        }
     }
 
-    match state.cache.apply(&light_id, &update).await {
-        Ok(()) => ok(),
-        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
+    if let Some(name) = new_name {
+        if let Err(e) = state.cache.rename(&light_id, &name).await {
+            return error(StatusCode::BAD_GATEWAY, &e.to_string());
+        }
     }
+    if has_state {
+        if let Err(e) = state.cache.apply(&light_id, &update).await {
+            return error(StatusCode::BAD_GATEWAY, &e.to_string());
+        }
+    }
+    ok()
 }
 
 // MARK: scenes

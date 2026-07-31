@@ -34,6 +34,8 @@ public struct ControlPanel: View {
     @State private var urlText = ""
     @State private var bridgeIPText = ""
     @State private var bridgeStatus: String?
+    @State private var renamingLightID: String?
+    @State private var renameText = ""
 
     /// Single source of truth for navigation — one current screen, so
     /// contradictory combinations (an open editor under a closed section)
@@ -392,33 +394,59 @@ public struct ControlPanel: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(controller.lights) { light in
-                Button {
-                    toggleSelection(light.id)
-                } label: {
-                    HStack {
-                        Image(systemName: controller.selection.contains(light.id)
-                              ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(controller.selection.contains(light.id) ? Color.accentColor : Color.secondary)
-                        Text(light.name)
-                        Spacer()
-                        Text("\(light.brightnessPercent)%")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                        Circle()
-                            .fill(light.swatchColor)
-                            .frame(width: 10, height: 10)
-                            .overlay(Circle().strokeBorder(.secondary.opacity(0.4), lineWidth: 0.75))
-                        if !light.reachable {
-                            Image(systemName: "wifi.slash")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                lightRow(light)
             }
         }
+    }
+
+    /// Selection is the checkmark alone; the name is double-click-to-rename.
+    private func lightRow(_ light: Light) -> some View {
+        HStack {
+            Button {
+                toggleSelection(light.id)
+            } label: {
+                Image(systemName: controller.selection.contains(light.id)
+                      ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(controller.selection.contains(light.id)
+                                     ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Include in manual control")
+            if renamingLightID == light.id {
+                TextField("", text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .onSubmit { commitRename(light.id) }
+                    .onExitCommand { renamingLightID = nil }
+            } else {
+                Text(light.name)
+                    .onTapGesture(count: 2) {
+                        renameText = light.name
+                        renamingLightID = light.id
+                    }
+                    .help("Double-click to rename")
+            }
+            Spacer()
+            Text("\(light.brightnessPercent)%")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Circle()
+                .fill(light.swatchColor)
+                .frame(width: 10, height: 10)
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.4), lineWidth: 0.75))
+            if !light.reachable {
+                Image(systemName: "wifi.slash")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func commitRename(_ id: String) {
+        let name = renameText.trimmingCharacters(in: .whitespaces)
+        renamingLightID = nil
+        guard !name.isEmpty else { return }
+        Task { await controller.renameLight(id: id, to: name) }
     }
 
     private var brightnessSlider: some View {
