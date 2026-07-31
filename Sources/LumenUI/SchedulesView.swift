@@ -75,7 +75,7 @@ struct SchedulesView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Add schedule")
             }
             if controller.schedules.isEmpty {
@@ -115,14 +115,14 @@ struct SchedulesView: View {
             } label: {
                 Image(systemName: "pencil")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .help("Edit")
             Button {
                 Task { errorMessage = await controller.deleteSchedule(named: name) }
             } label: {
                 Image(systemName: "trash")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .help("Delete")
         }
     }

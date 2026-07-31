@@ -123,32 +123,54 @@ extension LightController {
 
     // MARK: - Groups
 
+    /// Instantly move a light between groups in the *local* model — the
+    /// optimistic half of a drag-and-drop, so the row relocates the moment
+    /// it's dropped; the caller then performs the network writes (and any
+    /// reload restores server truth).
+    public func locallyMoveLight(id: String, toGroup target: String?) {
+        for key in groups.keys {
+            groups[key]?.lights.removeAll { $0 == id }
+        }
+        if let target {
+            groups[target]?.lights.append(id)
+        }
+    }
+
+    /// Instantly drop a group from the local model (the optimistic half of
+    /// "the room's last light left"); the caller's network writes and reload
+    /// settle server truth.
+    public func locallyRemoveGroup(id: String) {
+        groups.removeValue(forKey: id)
+    }
+
     /// Create a bridge group from the given lights; returns the daemon's
-    /// error or nil.
+    /// error or nil. Pass reload: false for intermediate steps of a
+    /// multi-write operation and reload once at the end.
     @discardableResult
-    public func createGroup(named name: String, lights: [String]) async -> String? {
+    public func createGroup(named name: String, lights: [String], reload: Bool = true) async -> String? {
         let body = try? JSONSerialization.data(withJSONObject: ["name": name, "lights": lights])
         let error = await send("POST", "groups", body: body)
-        await loadLibrary()
+        if reload { await loadLibrary() }
         return error
     }
 
     /// Update a group's name and/or membership (nil = leave unchanged).
     @discardableResult
-    public func updateGroup(id: String, name: String? = nil, lights: [String]? = nil) async -> String? {
+    public func updateGroup(id: String, name: String? = nil, lights: [String]? = nil,
+                            reload: Bool = true) async -> String? {
         var fields: [String: Any] = [:]
         if let name { fields["name"] = name }
         if let lights { fields["lights"] = lights }
         let body = try? JSONSerialization.data(withJSONObject: fields)
         let error = await send("PUT", "groups/\(id)", body: body)
-        await loadLibrary()
+        if reload { await loadLibrary() }
         return error
     }
 
     @discardableResult
-    public func deleteGroup(id: String) async -> String? {
+    public func deleteGroup(id: String, reload: Bool = true) async -> String? {
         let error = await send("DELETE", "groups/\(id)")
-        await loadLibrary()
+        if reload { await loadLibrary() }
         return error
     }
 

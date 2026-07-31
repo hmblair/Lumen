@@ -206,7 +206,7 @@ struct SceneEditorView: View {
             } label: {
                 Image(systemName: "plus")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .help("Add another curve (assign lights to it below)")
             Button {
                 draft.groups.remove(at: draft.selectedGroup)
@@ -215,7 +215,7 @@ struct SceneEditorView: View {
             } label: {
                 Image(systemName: "minus")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .disabled(draft.groups.count <= 1)
             .help("Delete the selected curve (its lights are left alone)")
             Spacer()
@@ -258,7 +258,7 @@ struct SceneEditorView: View {
                 } label: {
                     Image(systemName: "minus.circle")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .disabled(draft.selectedPoint == nil || currentPoints.wrappedValue.count <= 1)
                 .help("Delete selected point")
                 Text(draft.selectedPoint == nil

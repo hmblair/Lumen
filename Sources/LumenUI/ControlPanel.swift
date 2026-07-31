@@ -34,8 +34,6 @@ public struct ControlPanel: View {
     @State private var urlText = ""
     @State private var bridgeIPText = ""
     @State private var bridgeStatus: String?
-    @State private var renamingLightID: String?
-    @State private var renameText = ""
 
     /// Single source of truth for navigation — one current screen, so
     /// contradictory combinations (an open editor under a closed section)
@@ -60,6 +58,9 @@ public struct ControlPanel: View {
     }
 
     @State private var screen: Screen = .controls
+    /// Bumped on background clicks anywhere in the panel; RoomListView
+    /// dismisses its inline edits on change.
+    @State private var dismissEditsToken = 0
     @State private var urlStatus: URLStatus = .none
     @State private var checkTask: Task<Void, Never>?
 
@@ -119,6 +120,12 @@ public struct ControlPanel: View {
         .padding(14)
         // The axis canvas needs more room than the control column.
         .frame(width: isEditingScene ? 420 : 280)
+        .contentShape(Rectangle())
+        // A click on any non-control area of the panel dismisses inline
+        // edits (consumed clicks — buttons, sliders, fields — don't reach
+        // this, which is exactly right: clicking inside an edit field keeps
+        // it open).
+        .onTapGesture { dismissEditsToken &+= 1 }
         .onAppear {
             urlText = controller.baseURL?.absoluteString ?? ""
             // Keep first-run setup on screen so it doesn't jump to controls the
@@ -174,11 +181,10 @@ public struct ControlPanel: View {
         // are unreachable (writes would silently fail) or while a scene owns
         // them (writes would 409). The banner, header, and Quit stay usable.
         Group {
-            // Group UI insertion point (option A: chips). Switching to a
-            // different treatment (e.g. grouped sections) replaces this one
-            // component.
-            GroupChipsView(controller: controller)
-            lightPicker
+            // Room UI insertion point (option B: sectioned list). Option A
+            // (chips + flat list) lives at commit 2963c67 if it's ever
+            // wanted back.
+            RoomListView(controller: controller, dismissToken: dismissEditsToken)
             Divider()
 
             if controller.selectionIsMixed, let rep = controller.representative {
@@ -193,6 +199,10 @@ public struct ControlPanel: View {
             }
             .frame(width: 210, height: 210)
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+            // Dim the wheel itself here; the drop button below dims via its
+            // own style's disabled treatment (dimming after the overlay
+            // stacked both, greying the button twice).
+            .opacity(hasSelection ? 1 : 0.35)
             .overlay(alignment: .bottomTrailing) {
                 // White is the center of the HS wheel (saturation 0).
                 Button {
@@ -204,7 +214,6 @@ public struct ControlPanel: View {
                 .buttonStyle(HoverIconButtonStyle())
                 .help("Reset to white")
             }
-            .opacity(hasSelection ? 1 : 0.35)
             .disabled(!hasSelection)
             .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
 
@@ -363,14 +372,25 @@ public struct ControlPanel: View {
                 // No refresh button: polls adopt state continuously, so the
                 // panel is never stale by more than a poll interval.
 
-                // Each section icon becomes an x while its section is open;
-                // the scenes x also closes the editor (it's a sub-screen).
+                // Tight spacing: the hover style pads each icon by 3pt for
+                // its hover background, so the visual gap matches the old
+                // borderless layout.
+                HStack(spacing: 2) {
+                    headerIcons
+                }
+            }
+        }
+    }
+
+    // Each section icon becomes an x while its section is open; the scenes
+    // x also closes the editor (it's a sub-screen).
+    @ViewBuilder private var headerIcons: some View {
                 Button {
                     screen = screen.inScenes ? .controls : .scenes
                 } label: {
                     Image(systemName: screen.inScenes ? "xmark" : "paintpalette")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Scenes")
 
                 Button {
@@ -378,7 +398,7 @@ public struct ControlPanel: View {
                 } label: {
                     Image(systemName: screen == .schedules ? "xmark" : "calendar.badge.clock")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Schedules")
 
                 Button {
@@ -387,73 +407,8 @@ public struct ControlPanel: View {
                 } label: {
                     Image(systemName: screen == .settings ? "xmark" : "gearshape")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Settings")
-            }
-        }
-    }
-
-    private var lightPicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("LIGHTS").font(.caption).foregroundStyle(.secondary)
-            if controller.lights.isEmpty {
-                Text(controller.isReachable ? "No lights found" : "Not connected")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(controller.lights) { light in
-                lightRow(light)
-            }
-        }
-    }
-
-    /// Selection is the checkmark alone; the name is double-click-to-rename.
-    private func lightRow(_ light: Light) -> some View {
-        HStack {
-            Button {
-                toggleSelection(light.id)
-            } label: {
-                Image(systemName: controller.selection.contains(light.id)
-                      ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(controller.selection.contains(light.id)
-                                     ? Color.accentColor : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Include in manual control")
-            if renamingLightID == light.id {
-                TextField("", text: $renameText)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .onSubmit { commitRename(light.id) }
-                    .onExitCommand { renamingLightID = nil }
-            } else {
-                Text(light.name)
-                    .onTapGesture(count: 2) {
-                        renameText = light.name
-                        renamingLightID = light.id
-                    }
-                    .help("Double-click to rename")
-            }
-            Spacer()
-            Text("\(light.brightnessPercent)%")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-            Circle()
-                .fill(light.swatchColor)
-                .frame(width: 10, height: 10)
-                .overlay(Circle().strokeBorder(.secondary.opacity(0.4), lineWidth: 0.75))
-            if !light.reachable {
-                Image(systemName: "wifi.slash")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func commitRename(_ id: String) {
-        let name = renameText.trimmingCharacters(in: .whitespaces)
-        renamingLightID = nil
-        guard !name.isEmpty else { return }
-        Task { await controller.renameLight(id: id, to: name) }
     }
 
     private var brightnessSlider: some View {
@@ -496,30 +451,3 @@ public struct ControlPanel: View {
     }
 }
 
-/// An icon button that reacts to hover — brightening and showing a subtle
-/// background — so tappable icons (the brightness sun icons) read as clickable.
-private struct HoverIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HoverIcon(configuration: configuration)
-    }
-
-    private struct HoverIcon: View {
-        let configuration: Configuration
-        @State private var hovering = false
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(hovering ? Color.primary : Color.secondary)
-                .padding(3)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(hovering ? 0.12 : 0))
-                )
-                .scaleEffect(configuration.isPressed ? 0.9 : 1)
-                .animation(.easeOut(duration: 0.12), value: hovering)
-                .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
-                .onHover { hovering = $0 }
-                .contentShape(Rectangle())
-        }
-    }
-}

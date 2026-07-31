@@ -34,7 +34,7 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("New scene (curve editor)")
             }
             if controller.scenes.isEmpty {
@@ -52,7 +52,7 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .disabled(newSceneName.trimmingCharacters(in: .whitespaces).isEmpty)
                 .help("Save the wheel/slider color as a solid scene")
             }
@@ -75,7 +75,7 @@ struct ScenesView: View {
             } label: {
                 Image(systemName: "play.fill")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             // One scene at a time: the running one must finish or be
             // stopped first (the daemon would 409 anyway).
             .disabled(controller.running != nil)
@@ -85,14 +85,14 @@ struct ScenesView: View {
             } label: {
                 Image(systemName: "pencil")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .help("Edit in the curve editor")
             Button {
                 Task { errorMessage = await controller.deleteScene(named: name) }
             } label: {
                 Image(systemName: "trash")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(HoverIconButtonStyle())
             .help("Delete")
         }
     }
