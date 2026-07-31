@@ -131,7 +131,7 @@ public struct ControlPanel: View {
     private var serverSetup: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("SERVER URL").font(.caption).foregroundStyle(.secondary)
-            TextField("https://lights.example.com", text: $urlText)
+            TextField("https://lumen.example.com", text: $urlText)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: urlText) { _ in checkURL() }
                 .overlay(alignment: .trailing) {

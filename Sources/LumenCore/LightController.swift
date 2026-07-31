@@ -1,17 +1,18 @@
 // LightController.swift
-// Model + networking. The UI and shell depend only on this type and the
-// normalized `Light` value; all provider-specific wire encoding (endpoints,
-// JSON shape, the 0–65535 / 1–254 ranges) is confined here. This implementation
-// targets a Philips Hue bridge (v1 API served at the datastore root, e.g.
-// lights.hmblair.com), so supporting another provider means rewriting this one
-// file. No UI imports, so it's shared by the macOS and iOS apps.
+// Model + networking against the Lumen daemon's normalized API (see daemon/):
+// GET  {base}/lights      -> {"lights": [Light]}         (502 = bridge down)
+// PUT  {base}/lights/{id} <- subset of {on, hue, saturation, level}
+// All values are 0...1 on the wire, so there is nothing provider-specific
+// anywhere in the apps — the daemon owns all vendor translation. No UI
+// imports, so it's shared by the macOS and iOS apps.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import Foundation
 import Combine
 
-/// A light in normalized, provider-agnostic units — no vendor encodings escape.
-public struct Light: Identifiable, Hashable {
+/// A light in normalized, provider-agnostic units. Codable because this is
+/// exactly the daemon's wire schema.
+public struct Light: Identifiable, Hashable, Codable {
     public let id: String
     public var name: String
     public var on: Bool
@@ -61,8 +62,11 @@ public final class LightController: ObservableObject {
     /// it, so optimistic edits are never overridden while connected.
     @Published public private(set) var syncToken = 0
 
-    /// Base URL, persisted to `UserDefaults`. `nil` until the user configures it
-    /// — there is no built-in default.
+    /// Daemon base URL (e.g. https://lumen.hmblair.com), persisted to
+    /// `UserDefaults`. `nil` until the user configures it — there is no
+    /// built-in default. The key is new as of the daemon migration, so users
+    /// coming from the direct-bridge era reconfigure rather than silently
+    /// pointing the new schema at an old bridge URL.
     @Published public var baseURL: URL? {
         didSet {
             guard baseURL != oldValue else { return }
@@ -80,7 +84,7 @@ public final class LightController: ObservableObject {
 
     private let session: URLSession
     private let defaults: UserDefaults
-    private let baseURLKey = "HueBridgeBaseURL"
+    private let baseURLKey = "LumenServerBaseURL"
 
     /// Short per-request timeout so an unreachable source surfaces quickly; the
     /// URLSession default is 60s.
@@ -171,31 +175,24 @@ public final class LightController: ObservableObject {
 
     // MARK: - Reads
 
+    private struct LightsResponse: Decodable {
+        let lights: [Light]
+    }
+
     public func refresh() async {
         guard let baseURL else { lastError = "No source configured"; return }
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("lights"))
             request.timeoutInterval = requestTimeout
-            let (data, _) = try await session.data(for: request)
-            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                lastError = "Unexpected response"
-                return
+            let (data, response) = try await session.data(for: request)
+            // The daemon answers 502 while the bridge is unreachable; treat any
+            // non-2xx like a dropped request so the disconnect grace period and
+            // banner apply.
+            if let http = response as? HTTPURLResponse,
+               !(200...299).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
             }
-            var parsed: [Light] = []
-            for (id, value) in obj {
-                guard let d = value as? [String: Any] else { continue }
-                let state = d["state"] as? [String: Any] ?? [:]
-                // Hue-native encodings map to normalized 0...1 here, so no vendor
-                // units reach the model.
-                parsed.append(Light(
-                    id: id,
-                    name: d["name"] as? String ?? "Light \(id)",
-                    on: state["on"] as? Bool ?? false,
-                    hue: Double(state["hue"] as? Int ?? 0) / 65_535,
-                    saturation: Double(state["sat"] as? Int ?? 0) / 254,
-                    level: Double(state["bri"] as? Int ?? 0) / 254,
-                    reachable: state["reachable"] as? Bool ?? false))
-            }
+            let parsed = try JSONDecoder().decode(LightsResponse.self, from: data).lights
             // Adopt state only on first load or a reconnection — never during
             // steady-state polling, so a poll that lands before a write has
             // propagated can't revert an optimistic edit.
@@ -225,7 +222,10 @@ public final class LightController: ObservableObject {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("lights"))
             request.timeoutInterval = requestTimeout
-            _ = try await session.data(for: request)
+            let (_, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                return (200...299).contains(http.statusCode)
+            }
             return true
         } catch {
             return false
@@ -239,15 +239,13 @@ public final class LightController: ObservableObject {
     /// color is stored and shows once the light is bright enough to see.
     public func applyColor(hue: Double, saturation: Double) {
         let ids = targets
-        let hueInt = Int((hue * 65_535).rounded())
-        let satInt = Int((saturation * 254).rounded())
         updateLocal(ids) { $0.hue = hue; $0.saturation = saturation }
 
         colorTask?.cancel()
         colorTask = Task {
             try? await Task.sleep(nanoseconds: 60_000_000) // debounce drags
             if Task.isCancelled { return }
-            await send(["hue": hueInt, "sat": satInt], to: ids)
+            await send(["hue": hue, "saturation": saturation], to: ids)
         }
     }
 
@@ -257,7 +255,6 @@ public final class LightController: ObservableObject {
     public func applyBrightness(_ value: Double) {
         let ids = targets
         let isOff = value <= 0
-        let bri = max(1, min(254, Int((value * 254).rounded())))
         updateLocal(ids) {
             if isOff { $0.on = false } else { $0.on = true; $0.level = value }
         }
@@ -266,7 +263,7 @@ public final class LightController: ObservableObject {
         briTask = Task {
             try? await Task.sleep(nanoseconds: 60_000_000)
             if Task.isCancelled { return }
-            let body: [String: Any] = isOff ? ["on": false] : ["on": true, "bri": bri]
+            let body: [String: Any] = isOff ? ["on": false] : ["on": true, "level": value]
             await send(body, to: ids)
         }
     }
@@ -290,7 +287,7 @@ public final class LightController: ObservableObject {
             for id in ids {
                 group.addTask { [baseURL, session] in
                     var req = URLRequest(
-                        url: baseURL.appendingPathComponent("lights/\(id)/state"))
+                        url: baseURL.appendingPathComponent("lights/\(id)"))
                     req.httpMethod = "PUT"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.httpBody = try? JSONSerialization.data(withJSONObject: body)

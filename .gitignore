@@ -3,6 +3,9 @@
 .swiftpm/
 Package.resolved
 
+# Rust (daemon/)
+daemon/target/
+
 # macOS
 .DS_Store
 

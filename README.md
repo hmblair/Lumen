@@ -1,8 +1,8 @@
 # Lumen
 
 A menu-bar smart-light controller: an HS color wheel, a brightness slider, and
-per-light selection. The server URL is entered in-app on first launch (e.g. a
-proxy like `https://lights.hmblair.com`) and remembered across launches.
+per-light selection. The server URL is entered in-app on first launch (e.g.
+`https://lumen.hmblair.com`, the Lumen daemon) and remembered across launches.
 
 The package (`Lumen`) is split so the logic and UI can be shared across apps,
 and so the provider-specific code is isolated:
@@ -20,12 +20,17 @@ is just the composition root and the only place AppKit appears.
 
 ## Provider-agnostic by design
 
-The UI and shell depend only on `LightController` and the normalized `Light`
-value (all values `0…1`); no vendor units or endpoints escape. Everything
-provider-specific — the wire protocol, JSON shape, and native color/brightness
-encodings — is confined to `LightController.swift`. It currently targets a
-Philips Hue bridge (v1 API at the datastore root), so supporting another
-provider means rewriting that one file.
+The apps contain nothing provider-specific at all. They speak the normalized
+schema of the Lumen daemon (see [daemon/](daemon/README.md)) — a small
+always-on service that polls the light source, serves cached state, and owns
+every vendor detail (currently Philips Hue). All values are `0…1` on the wire
+and in the model; supporting another vendor means rewriting the daemon's
+`bridge.rs`, and no app updates at all.
+
+```
+Lumen.app / iOS ── https://lumen.hmblair.com (Caddy)
+                        └── lumen-daemon ── Philips Hue bridge
+```
 
 ## Adding an iOS app
 
@@ -103,8 +108,11 @@ menu bar icon when the lights are unreachable, and reseeds only on reconnect.
 
 ## Notes / next steps
 
-- The current (Hue) server exposes the datastore at the root, so endpoints are
-  `/lights` and `/lights/{id}/state`. Set the server URL via the panel's
-  settings (gear button).
+- Set the server URL (the daemon, e.g. `https://lumen.hmblair.com`) via the
+  panel's settings (gear button). The raw bridge passthrough at
+  `lights.hmblair.com` remains for debugging but the app no longer uses it.
+- Phase 2: migrate huectl's scheduler and effects (sunrise etc.) into the
+  daemon, add schedule CRUD + a schedules screen, and drive the "schedule
+  running — manual control paused" UI from `GET /status`.
 - A `ControlWidget` could add a quick on/off toggle to Control Center; the color
   wheel has to stay in the menu bar.

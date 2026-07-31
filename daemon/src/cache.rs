@@ -1,0 +1,93 @@
+//! Polled bridge state, cached and shared by every HTTP client.
+//!
+//! A background task polls the bridge once a second so any number of clients
+//! can read light state without multiplying bridge traffic. Writes go through
+//! to the bridge synchronously and patch the cache optimistically, so a read
+//! that follows a write reflects it immediately instead of waiting for the
+//! next poll.
+//!
+//! Author: Hamish M. Blair <hmblair@stanford.edu>
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::RwLock;
+use tracing::{info, warn};
+
+use crate::bridge::{Bridge, BridgeError, Light, StateUpdate};
+
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+const FRESH_FOR: Duration = Duration::from_secs(5);
+
+pub struct LightCache {
+    bridge: Arc<Bridge>,
+    inner: RwLock<Option<(Vec<Light>, Instant)>>,
+}
+
+impl LightCache {
+    pub fn new(bridge: Arc<Bridge>) -> Self {
+        LightCache {
+            bridge,
+            inner: RwLock::new(None),
+        }
+    }
+
+    /// Current lights, or None when the bridge data is stale/absent.
+    pub async fn snapshot(&self) -> Option<Vec<Light>> {
+        let guard = self.inner.read().await;
+        let (lights, updated_at) = guard.as_ref()?;
+        if updated_at.elapsed() > FRESH_FOR {
+            return None;
+        }
+        Some(lights.clone())
+    }
+
+    /// Write through to the bridge, then patch the cached light.
+    pub async fn apply(&self, light_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
+        self.bridge.apply_state(light_id, state).await?;
+        let mut guard = self.inner.write().await;
+        if let Some((lights, _)) = guard.as_mut() {
+            if let Some(light) = lights.iter_mut().find(|l| l.id == light_id) {
+                if let Some(on) = state.on {
+                    light.on = on;
+                }
+                if let Some(hue) = state.hue {
+                    light.hue = hue;
+                }
+                if let Some(saturation) = state.saturation {
+                    light.saturation = saturation;
+                }
+                if let Some(level) = state.level {
+                    light.level = level;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Poll forever; logs only reachability transitions, not every failure.
+    pub fn spawn_poll_loop(self: &Arc<Self>) {
+        let cache = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut was_reachable: Option<bool> = None;
+            loop {
+                match cache.bridge.fetch_lights().await {
+                    Ok(lights) => {
+                        if was_reachable != Some(true) {
+                            info!("Bridge reachable; {} light(s)", lights.len());
+                            was_reachable = Some(true);
+                        }
+                        *cache.inner.write().await = Some((lights, Instant::now()));
+                    }
+                    Err(e) => {
+                        if was_reachable != Some(false) {
+                            warn!("Bridge unreachable: {e}");
+                            was_reachable = Some(false);
+                        }
+                    }
+                }
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+        });
+    }
+}

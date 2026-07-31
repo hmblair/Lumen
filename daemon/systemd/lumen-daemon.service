@@ -1,0 +1,13 @@
+# User unit (systemctl --user); survives logout because lingering is enabled.
+# ExecStart points at the release binary built on the box.
+[Unit]
+Description=Lumen light daemon
+After=network-online.target
+
+[Service]
+ExecStart=%h/dev/lumen-daemon/target/release/lumen-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
