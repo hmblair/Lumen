@@ -20,7 +20,7 @@ through synchronously and patch the cache optimistically.
 | Endpoint | Body / response |
 |----------|-----------------|
 | `GET /lights` | `{"lights": [{id, name, on, hue, saturation, level, reachable}]}`; **502** while the bridge is unreachable |
-| `PUT /lights/<id>` | any subset of `{on, hue, saturation, level}`; **409** while a running scene owns the light |
+| `PUT /lights/<id>` | any subset of `{on, hue, saturation, level, name}`; state writes **409** while a running scene owns the light (renames pass — they aren't state) |
 | `GET /scenes` | `{"scenes": {name: {duration, lights: {id: [{t, hue, saturation, level}]}}}}` |
 | `PUT /scenes/<name>` | same shape — upsert |
 | `DELETE /scenes/<name>` | **409** while a schedule references it |
@@ -79,12 +79,11 @@ cargo build --release
 cargo test                 # unit tests for the Hue unit conversions
 ```
 
-The box runs `~/dev/lumen-daemon` under the systemd **user** unit in
-`systemd/` (lingering is enabled, so it runs without a login session).
-Interim deploy is rsync of this directory + `cargo build --release` there;
-the intended flow is pull-from-GitHub + build on the box. Public exposure is
-`cloudflare-expose add lumen 8600` — DNS, Caddy block, and TLS are managed by
-that tool.
+Run it on an always-on machine on the same network as the bridge, from a
+clone of this repo. A systemd **user** unit is provided in `systemd/`
+(enable lingering so it survives logout), and clients reach the daemon
+through whatever reverse proxy provides your TLS. Deploying an update is
+`git pull`, rebuild, restart.
 
 ## History
 
