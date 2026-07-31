@@ -39,6 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var iconObserver: AnyCancellable?
     private var outsideClickMonitor: Any?
     private var pollActivity: NSObjectProtocol?
+    /// Logical open state: false the moment closing begins, unlike
+    /// panel.isVisible, which stays true through the 0.3s fade-out (a poll
+    /// tick during the fade was re-lighting the status highlight).
+    private var panelIsOpen = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-only app: no Dock icon, no main window.
@@ -102,13 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func openPanel() {
         guard let buttonWindow = statusItem.button?.window else { return }
+        panelIsOpen = true
         panel.present(below: buttonWindow.frame)
         // Deferred: applying the highlight inside the click action gets
         // undone a moment later when the button's own mouse tracking ends;
         // one runloop turn later it sticks.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.statusItem.button?.highlight(self.panel.isVisible)
+            self.statusItem.button?.highlight(self.panelIsOpen)
         }
 
         // Menus also dismiss on outside clicks that don't move key status
@@ -123,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func closePanel() {
         guard panel.isVisible else { return }
+        panelIsOpen = false
         if let monitor = outsideClickMonitor {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
@@ -146,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Re-assigning the image clears the button's pressed state, which
         // made the menu-open highlight flash and vanish at the next poll
         // tick; keep it in step with the panel.
-        button.highlight(panel?.isVisible ?? false)
+        button.highlight(panelIsOpen)
     }
 
     /// The menu bar icon. Palette rendering keeps the bulb neutral (Primary =
