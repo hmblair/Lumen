@@ -220,6 +220,20 @@ public final class HueClient: ObservableObject {
         }
     }
 
+    /// One-shot reachability probe for the settings field's status indicator.
+    /// Independent of the polled `isReachable` and its grace period.
+    public func checkReachable() async -> Bool {
+        guard let baseURL else { return false }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("lights"))
+            request.timeoutInterval = requestTimeout
+            _ = try await session.data(for: request)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Writes
 
     /// Set hue/saturation without touching power. Brightness is the sole on/off

@@ -18,6 +18,10 @@ public struct HueControlPanel: View {
 
     @State private var urlText = ""
     @State private var showingSettings = false
+    @State private var urlStatus: URLStatus = .none
+    @State private var checkTask: Task<Void, Never>?
+
+    private enum URLStatus { case none, checking, valid, invalid }
 
     /// - Parameter onQuit: supplied by platforms that can quit (macOS menu bar);
     ///   pass nil on iOS to hide the Quit button.
@@ -42,6 +46,9 @@ public struct HueControlPanel: View {
         .padding(14)
         .onAppear {
             urlText = client.baseURL?.absoluteString ?? ""
+            // Keep first-run setup on screen so it doesn't jump to controls the
+            // moment a valid URL auto-applies; the user leaves via the gear.
+            if !client.isConfigured { showingSettings = true }
             seedFromLiveState()
         }
         .onChange(of: client.selection) { _ in seedFromLiveState() }
@@ -105,36 +112,53 @@ public struct HueControlPanel: View {
             Text("BRIDGE URL").font(.caption).foregroundStyle(.secondary)
             TextField("https://bridge.example.com", text: $urlText)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit(saveBridge)
-            if let err = client.lastError {
-                Text(err).font(.caption).foregroundStyle(.red)
-            }
-            HStack {
-                if let onQuit {
-                    Button { onQuit() } label: {
-                        Image(systemName: "power.circle")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(Color.red, Color.primary)
-                            .font(.title2)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Quit")
+                .onChange(of: urlText) { _ in checkURL() }
+                .overlay(alignment: .trailing) {
+                    urlStatusIcon.padding(.trailing, 6)
                 }
-                Spacer()
-                Button("Save", action: saveBridge)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(normalizedURL(from: urlText) == nil)
+            if let onQuit {
+                Button { onQuit() } label: {
+                    Image(systemName: "power.circle")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.red, Color.primary)
+                        .font(.title2)
+                }
+                .buttonStyle(HoverIconButtonStyle())
+                .help("Quit")
             }
+        }
+        .onAppear(perform: checkURL)
+    }
+
+    @ViewBuilder private var urlStatusIcon: some View {
+        switch urlStatus {
+        case .none:
+            EmptyView()
+        case .checking:
+            ProgressView().controlSize(.small)
+        case .valid:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .invalid:
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         }
     }
 
-    private func saveBridge() {
-        guard let url = normalizedURL(from: urlText) else { return }
-        client.baseURL = url
-        showingSettings = false
-        Task {
-            await client.refresh()
-            seedFromLiveState()
+    /// Auto-apply the field: validate, then probe reachability, driving the
+    /// status indicator (spinner -> tick/cross). A well-formed URL is applied
+    /// even if unreachable, so the bridge updates as soon as you finish typing.
+    private func checkURL() {
+        checkTask?.cancel()
+        let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { urlStatus = .none; return }
+        guard let url = normalizedURL(from: urlText) else { urlStatus = .invalid; return }
+        urlStatus = .checking
+        checkTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))   // debounce typing
+            if Task.isCancelled { return }
+            client.baseURL = url
+            let ok = await client.checkReachable()
+            if Task.isCancelled { return }
+            urlStatus = ok ? .valid : .invalid
         }
     }
 
