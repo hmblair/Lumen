@@ -66,7 +66,16 @@ public final class HueClient: ObservableObject {
     /// Bridge base URL, persisted to `UserDefaults`. `nil` until the user
     /// configures it — there is no built-in default.
     @Published public var baseURL: URL? {
-        didSet { persistBaseURL() }
+        didSet {
+            guard baseURL != oldValue else { return }
+            persistBaseURL()
+            // Pointing at a different bridge: drop the old one's lights and
+            // force the next poll to adopt the new bridge's state.
+            lights = []
+            selection = []
+            hasSynced = false
+            failedPolls = 0
+        }
     }
 
     public var isConfigured: Bool { baseURL != nil }
