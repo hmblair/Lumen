@@ -154,8 +154,22 @@ impl LightCache {
     }
 
     pub async fn delete_group(&self, group_id: &str) -> Result<(), BridgeError> {
-        self.bridge.delete_group(group_id).await?;
-        self.refresh_groups().await
+        let result = self.bridge.delete_group(group_id).await;
+        self.refresh_groups().await?;
+        match result {
+            Ok(()) => Ok(()),
+            // The v1 API can answer "resource not available" even as the
+            // group disappears (seen deleting a vendor-app-created Room).
+            // Deletion is judged by the outcome: if the group is gone, it
+            // succeeded.
+            Err(e) => {
+                if self.groups.read().await.iter().any(|g| g.id == group_id) {
+                    Err(e)
+                } else {
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Rename a light on the bridge, patching the cache like a state write.
