@@ -77,6 +77,17 @@ public struct HueControlPanel: View {
             }
             .frame(width: 210, height: 210)
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+            .overlay(alignment: .bottomTrailing) {
+                // White is the center of the HS wheel (saturation 0).
+                Button {
+                    saturation = 0
+                    client.applyColor(hue: hue, saturation: 0)
+                } label: {
+                    Image(systemName: "drop.halffull")
+                }
+                .buttonStyle(HoverIconButtonStyle())
+                .help("Reset to white")
+            }
             .opacity(hasSelection ? 1 : 0.35)
             .disabled(!hasSelection)
             .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
