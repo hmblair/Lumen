@@ -1,76 +1,74 @@
-// HueClient.swift
-// Platform-agnostic model + networking for the Hue bridge proxy. No UI imports,
-// so this target is shared unchanged by the macOS and iOS apps.
-// The proxy at lights.hmblair.com exposes the datastore at the root, so light
-// endpoints are /lights and /lights/{id}/state.
+// LightController.swift
+// Model + networking. The UI and shell depend only on this type and the
+// normalized `Light` value; all provider-specific wire encoding (endpoints,
+// JSON shape, the 0–65535 / 1–254 ranges) is confined here. This implementation
+// targets a Philips Hue bridge (v1 API served at the datastore root, e.g.
+// lights.hmblair.com), so supporting another provider means rewriting this one
+// file. No UI imports, so it's shared by the macOS and iOS apps.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import Foundation
 import Combine
 
+/// A light in normalized, provider-agnostic units — no vendor encodings escape.
 public struct Light: Identifiable, Hashable {
     public let id: String
     public var name: String
     public var on: Bool
-    public var bri: Int          // 1...254
-    public var hue: Int          // 0...65535
-    public var sat: Int          // 0...254
+    public var hue: Double         // 0...1
+    public var saturation: Double  // 0...1
+    public var level: Double       // 0...1 device brightness, independent of `on`
     public var reachable: Bool
 
-    public init(id: String, name: String, on: Bool, bri: Int, hue: Int, sat: Int, reachable: Bool) {
+    public init(id: String, name: String, on: Bool,
+                hue: Double, saturation: Double, level: Double, reachable: Bool) {
         self.id = id
         self.name = name
         self.on = on
-        self.bri = bri
         self.hue = hue
-        self.sat = sat
+        self.saturation = saturation
+        self.level = level
         self.reachable = reachable
     }
 }
 
-// MARK: - Single source of truth for Hue state <-> UI values
-
 extension Light {
-    public var hueFraction: Double { Double(hue) / 65_535 }
-    public var satFraction: Double { Double(sat) / 254 }
-
-    /// Perceived brightness, 0...1. Off and 0% are the same state: there is no
-    /// brightness kept independently of power, so an off light reads as 0 and a
-    /// light is off exactly when its brightness is 0.
-    public var brightnessFraction: Double { on ? Double(bri) / 254 : 0 }
-    public var brightnessPercent: Int { Int((brightnessFraction * 100).rounded()) }
+    /// Perceived brightness, 0...1. Off and 0 are the same state: a light is off
+    /// exactly when its brightness is 0, so an off light reads as 0.
+    public var brightness: Double { on ? level : 0 }
+    public var brightnessPercent: Int { Int((brightness * 100).rounded()) }
 }
 
-/// Shortest distance on the 0...65535 hue circle (0 and 65535 are adjacent).
-func hueDistance(_ a: Int, _ b: Int) -> Int {
-    let d = abs(a - b) % 65_536
-    return min(d, 65_536 - d)
+/// Shortest distance on the 0...1 hue circle (0 and 1 are adjacent).
+func hueDistance(_ a: Double, _ b: Double) -> Double {
+    let d = abs(a - b)
+    return min(d, 1 - d)
 }
 
 @MainActor
-public final class HueClient: ObservableObject {
+public final class LightController: ObservableObject {
     @Published public private(set) var lights: [Light] = []
     @Published public var selection: Set<String> = []
     @Published public private(set) var lastError: String?
 
-    /// Whether the bridge is reachable, per the polling heartbeat. Only flips to
-    /// false after several consecutive failed polls, so a transient blip (e.g. a
-    /// write colliding with a poll) doesn't make the hint flicker.
+    /// Whether the light source is reachable, per the polling heartbeat. Only
+    /// flips to false after several consecutive failed polls, so a transient blip
+    /// (e.g. a write colliding with a poll) doesn't make the hint flicker.
     @Published public private(set) var isReachable = true
 
-    /// Bumps whenever the client adopts fresh bridge state — first load or a
+    /// Bumps whenever the controller adopts fresh state — first load or a
     /// reconnection. The panel reseeds on change. Steady-state polls don't bump
     /// it, so optimistic edits are never overridden while connected.
     @Published public private(set) var syncToken = 0
 
-    /// Bridge base URL, persisted to `UserDefaults`. `nil` until the user
-    /// configures it — there is no built-in default.
+    /// Base URL, persisted to `UserDefaults`. `nil` until the user configures it
+    /// — there is no built-in default.
     @Published public var baseURL: URL? {
         didSet {
             guard baseURL != oldValue else { return }
             persistBaseURL()
-            // Pointing at a different bridge: drop the old one's lights and
-            // force the next poll to adopt the new bridge's state.
+            // Pointing at a different source: drop the old lights and force the
+            // next poll to adopt the new state.
             lights = []
             selection = []
             hasSynced = false
@@ -84,18 +82,18 @@ public final class HueClient: ObservableObject {
     private let defaults: UserDefaults
     private let baseURLKey = "HueBridgeBaseURL"
 
-    /// Short per-request timeout so an unreachable bridge surfaces quickly; the
+    /// Short per-request timeout so an unreachable source surfaces quickly; the
     /// URLSession default is 60s.
     private let requestTimeout: TimeInterval = 5
 
-    /// Consecutive failed polls before the bridge is considered unreachable — a
+    /// Consecutive failed polls before the source is considered unreachable — a
     /// grace period so a single dropped request doesn't flip the UI.
     private let disconnectThreshold = 3
     private var failedPolls = 0
     private var hasSynced = false
 
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
-    /// bridge or a stub without touching this type.
+    /// source or a stub without touching this type.
     public init(session: URLSession = .shared, defaults: UserDefaults = .standard) {
         self.session = session
         self.defaults = defaults
@@ -134,11 +132,11 @@ public final class HueClient: ObservableObject {
     /// "Mixed" hint, since the wheel can only show one position.
     public var selectionIsMixed: Bool {
         guard let first = selectedLights.first else { return false }
-        let hueTolerance = 655   // ~1% of the hue circle
-        let satTolerance = 6
+        let hueTolerance = 0.01
+        let satTolerance = 0.02
         return selectedLights.contains {
             hueDistance($0.hue, first.hue) > hueTolerance
-                || abs($0.sat - first.sat) > satTolerance
+                || abs($0.saturation - first.saturation) > satTolerance
         }
     }
 
@@ -147,9 +145,7 @@ public final class HueClient: ObservableObject {
     public var brightnessIsMixed: Bool {
         guard let first = selectedLights.first else { return false }
         let tolerance = 0.02   // ~2%
-        return selectedLights.contains {
-            abs($0.brightnessFraction - first.brightnessFraction) > tolerance
-        }
+        return selectedLights.contains { abs($0.brightness - first.brightness) > tolerance }
     }
 
     // MARK: - Polling
@@ -176,31 +172,33 @@ public final class HueClient: ObservableObject {
     // MARK: - Reads
 
     public func refresh() async {
-        guard let baseURL else { lastError = "No bridge configured"; return }
+        guard let baseURL else { lastError = "No source configured"; return }
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("lights"))
             request.timeoutInterval = requestTimeout
             let (data, _) = try await session.data(for: request)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                lastError = "Unexpected response from the bridge"
+                lastError = "Unexpected response"
                 return
             }
             var parsed: [Light] = []
             for (id, value) in obj {
                 guard let d = value as? [String: Any] else { continue }
                 let state = d["state"] as? [String: Any] ?? [:]
+                // Hue-native encodings map to normalized 0...1 here, so no vendor
+                // units reach the model.
                 parsed.append(Light(
                     id: id,
                     name: d["name"] as? String ?? "Light \(id)",
                     on: state["on"] as? Bool ?? false,
-                    bri: state["bri"] as? Int ?? 0,
-                    hue: state["hue"] as? Int ?? 0,
-                    sat: state["sat"] as? Int ?? 0,
+                    hue: Double(state["hue"] as? Int ?? 0) / 65_535,
+                    saturation: Double(state["sat"] as? Int ?? 0) / 254,
+                    level: Double(state["bri"] as? Int ?? 0) / 254,
                     reachable: state["reachable"] as? Bool ?? false))
             }
-            // Adopt bridge state only on first load or a reconnection — never
-            // during steady-state polling, so a poll that lands before a write
-            // has propagated can't revert an optimistic edit.
+            // Adopt state only on first load or a reconnection — never during
+            // steady-state polling, so a poll that lands before a write has
+            // propagated can't revert an optimistic edit.
             let reconnected = !isReachable
             failedPolls = 0
             isReachable = true
@@ -215,7 +213,7 @@ public final class HueClient: ObservableObject {
             failedPolls += 1
             if failedPolls >= disconnectThreshold {
                 isReachable = false
-                lastError = "Can't reach the bridge"
+                lastError = "Can't reach the lights"
             }
         }
     }
@@ -236,14 +234,14 @@ public final class HueClient: ObservableObject {
 
     // MARK: - Writes
 
-    /// Set hue/saturation without touching power. Brightness is the sole on/off
-    /// control, so changing color never turns a light on or off — the color is
-    /// stored and shows once the light is bright enough to see.
+    /// Set hue/saturation (0...1) without touching power. Brightness is the sole
+    /// on/off control, so changing color never turns a light on or off — the
+    /// color is stored and shows once the light is bright enough to see.
     public func applyColor(hue: Double, saturation: Double) {
         let ids = targets
         let hueInt = Int((hue * 65_535).rounded())
         let satInt = Int((saturation * 254).rounded())
-        updateLocal(ids) { $0.hue = hueInt; $0.sat = satInt }
+        updateLocal(ids) { $0.hue = hue; $0.saturation = saturation }
 
         colorTask?.cancel()
         colorTask = Task {
@@ -254,14 +252,14 @@ public final class HueClient: ObservableObject {
     }
 
     /// Brightness in 0...1 is the single power+level control: 0 turns lights off,
-    /// any positive value turns them on at the mapped `bri`. A light is off iff
+    /// any positive value turns them on at the mapped level. A light is off iff
     /// its brightness is 0 — no brightness is remembered across off.
     public func applyBrightness(_ value: Double) {
         let ids = targets
         let isOff = value <= 0
         let bri = max(1, min(254, Int((value * 254).rounded())))
         updateLocal(ids) {
-            if isOff { $0.on = false } else { $0.on = true; $0.bri = bri }
+            if isOff { $0.on = false } else { $0.on = true; $0.level = value }
         }
 
         briTask?.cancel()
@@ -282,8 +280,8 @@ public final class HueClient: ObservableObject {
     }
 
     // Fire-and-forget. Reachability is judged solely by the polling heartbeat,
-    // not by writes: a write can fail transiently (colliding with a poll, bridge
-    // briefly busy) while the bridge is fine, and letting that flip the UI made
+    // not by writes: a write can fail transiently (colliding with a poll, source
+    // briefly busy) while the source is fine, and letting that flip the UI made
     // the disconnected hint flicker during drags.
     private func send(_ body: [String: Any], to ids: [String]) async {
         guard !ids.isEmpty, let baseURL else { return }

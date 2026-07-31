@@ -1,21 +1,31 @@
-# HueKit
+# Lumen
 
-Philips Hue control: an HS color wheel, a brightness slider, and per-light
-selection. The bridge URL is entered in-app on first launch (e.g. a proxy like
-`https://lights.hmblair.com`) and remembered across launches.
+A menu-bar smart-light controller: an HS color wheel, a brightness slider, and
+per-light selection. The server URL is entered in-app on first launch (e.g. a
+proxy like `https://lights.hmblair.com`) and remembered across launches.
 
-The package (`HueKit`) is split so the logic and UI can be shared across apps:
+The package (`Lumen`) is split so the logic and UI can be shared across apps,
+and so the provider-specific code is isolated:
 
 | Target | Kind | Depends on | Platform |
 |--------|------|------------|----------|
-| `HueCore` | library | Foundation, Combine | any — no UI |
-| `HueUI` | library | HueCore, SwiftUI | macOS + iOS |
-| `HueBar` | executable | HueCore, HueUI | macOS menu-bar shell |
+| `LumenCore` | library | Foundation, Combine | any — no UI |
+| `LumenUI` | library | LumenCore, SwiftUI | macOS + iOS |
+| `Lumen` | executable | LumenCore, LumenUI | macOS menu-bar shell |
 
-`HueCore` holds the model (`Light`) and `HueClient` (networking, optimistic
-updates, mixed-selection checks) with no UI import. `HueUI` holds the
-cross-platform SwiftUI views, including the reusable `HueControlPanel`. `HueBar`
+`LumenCore` holds the model (`Light`) and `LightController` (networking,
+optimistic updates, mixed-selection checks) with no UI import. `LumenUI` holds
+the cross-platform SwiftUI views, including the reusable `ControlPanel`. `Lumen`
 is just the composition root and the only place AppKit appears.
+
+## Provider-agnostic by design
+
+The UI and shell depend only on `LightController` and the normalized `Light`
+value (all values `0…1`); no vendor units or endpoints escape. Everything
+provider-specific — the wire protocol, JSON shape, and native color/brightness
+encodings — is confined to `LightController.swift`. It currently targets a
+Philips Hue bridge (v1 API at the datastore root), so supporting another
+provider means rewriting that one file.
 
 ## Adding an iOS app
 
@@ -23,33 +33,32 @@ The shared code is ready to reuse — an iOS app is a new `@main` plus a window:
 
 ```swift
 import SwiftUI
-import HueCore
-import HueUI
+import LumenCore
+import LumenUI
 
 @main
-struct HueMobileApp: App {
-    @StateObject private var client = HueClient()
+struct LumenMobileApp: App {
+    @StateObject private var controller = LightController()
     var body: some Scene {
-        WindowGroup { HueControlPanel(client: client) }  // no onQuit on iOS
+        WindowGroup { ControlPanel(controller: controller) }  // no onQuit on iOS
     }
 }
 ```
 
-There is no built-in bridge URL: on first launch the panel shows a **Bridge URL**
-field, and the entered value is persisted to `UserDefaults` (key
-`HueBridgeBaseURL`) and reused on later launches. Edit it any time via the gear
-button. `UserDefaults` and `URLSession` are injectable via `HueClient.init`, so a
-test can supply an isolated defaults suite and a stub session. Add the iOS app as
-its own target/Xcode project depending on `HueCore` + `HueUI`.
+There is no built-in server URL: on first launch the panel shows a **Server URL**
+field, and the entered value is persisted to `UserDefaults` and reused later.
+Edit it any time via the gear button. `UserDefaults` and `URLSession` are
+injectable via `LightController.init`, so a test can supply an isolated defaults
+suite and a stub session. Add the iOS app as its own target/Xcode project
+depending on `LumenCore` + `LumenUI`.
 
 ## Run (macOS)
 
 ```sh
-cd ~/dev/HueBar
-swift run
+swift run   # or: make run
 ```
 
-A lightbulb icon appears in the menu bar (no Dock icon — the app runs as an
+A light icon appears in the menu bar (no Dock icon — the app runs as an
 accessory). Click it for the dropdown.
 
 ## Run in the background (no terminal)
@@ -57,14 +66,14 @@ accessory). Click it for the dropdown.
 Package the app as a `.app` bundle and launch it detached:
 
 ```sh
-make app       # builds .build/HueBar.app (release + Info.plist + ad-hoc sign)
+make app       # builds .build/Lumen.app (release + Info.plist + ad-hoc sign)
 make install   # copies it to /Applications
-open /Applications/HueBar.app
+open /Applications/Lumen.app
 ```
 
 `Resources/Info.plist` sets `LSUIElement`, so it runs as a background agent — no
-Dock icon, no terminal. To start it automatically: System Settings → General →
-Login Items → add `/Applications/HueBar.app`.
+Dock icon, no terminal. Or enable **Launch at login** from the app's settings
+(gear button), which registers it via `SMAppService`.
 
 ### Make targets
 
@@ -79,24 +88,23 @@ Login Items → add `/Applications/HueBar.app`.
 
 ## UI
 
-- **Lights** — click a row to include/exclude it from control. The dot shows
-  on/off; `wifi.slash` means the bridge reports it unreachable.
+- **Lights** — click a row to include/exclude it from control. The dot shows the
+  color at its current brightness; `wifi.slash` means the light is unreachable.
 - **Color wheel** — angle picks hue, distance from center picks saturation.
-  Sent as Hue `hue` (0–65535) / `sat` (0–254), which puts lights in `hs` mode.
-  Color is power-neutral: it never turns a light on or off.
-- **Brightness** — the single power+level control. 0% turns lights off
-  (`on:false`); any positive value turns them on at the mapped `bri` (1–254). A
-  light is off exactly when its brightness is 0 — nothing is remembered across
-  off. The left sun icon sets 0% (off), the right sun icon sets 100%.
+  Color is power-neutral: it never turns a light on or off. The bottom-right icon
+  resets to white (saturation 0).
+- **Brightness** — the single power+level control. 0 turns lights off; any
+  positive value turns them on. A light is off exactly when its brightness is 0.
+  The left sun icon sets 0% (off), the right sun icon sets 100%.
 
 Writes are debounced (~60 ms) and fan out concurrently to every selected light.
+The controller polls every second while awake, greys out the panel and dims the
+menu bar icon when the lights are unreachable, and reseeds only on reconnect.
 
 ## Notes / next steps
 
-- The proxy exposes the datastore at the root, so endpoints are `/lights` and
-  `/lights/{id}/state` (no app-key path segment). Set the bridge URL in the
-  panel's Bridge settings (gear button).
-- Groups/rooms (`/groups/{id}/action`) would let you control a whole room in
-  one request instead of fanning out.
-- A `ControlWidget` could add a quick on/off toggle to Control Center — see the
-  Mission Control discussion; the color wheel has to stay in the menu bar.
+- The current (Hue) server exposes the datastore at the root, so endpoints are
+  `/lights` and `/lights/{id}/state`. Set the server URL via the panel's
+  settings (gear button).
+- A `ControlWidget` could add a quick on/off toggle to Control Center; the color
+  wheel has to stay in the menu bar.

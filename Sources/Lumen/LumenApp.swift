@@ -1,4 +1,4 @@
-// HueBarApp.swift
+// LumenApp.swift
 // macOS shell: a menu-bar-only app. The NSStatusItem toggles a custom
 // non-activating NSPanel dressed as a menu (Liquid Glass on macOS 26+, the
 // classic menu material earlier; fade on dismiss). A panel rather than NSMenu
@@ -9,19 +9,19 @@
 // Panel behavior and positioning follow FluidMenuBarExtra
 // (github.com/wadetregaskis/FluidMenuBarExtra), the de-facto template for
 // menu-like panels; the glass chrome is NSGlassEffectView as the content view.
-// All reusable logic lives in HueCore/HueUI; this file is the composition root
-// and the only place AppKit appears.
+// All reusable logic lives in LumenCore/LumenUI; this file is the composition
+// root and the only place AppKit appears.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import SwiftUI
 import AppKit
 import Combine
 import ServiceManagement
-import HueCore
-import HueUI
+import LumenCore
+import LumenUI
 
 @main
-struct HueBarApp: App {
+struct LumenApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
@@ -32,7 +32,7 @@ struct HueBarApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private let client = HueClient()
+    private let controller = LightController()
     private var statusItem: NSStatusItem!
     private var panel: MenuPanel!
     private var iconObserver: AnyCancellable?
@@ -49,8 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateStatusButton()
 
         panel = MenuPanel(rootView:
-            HueControlPanel(
-                client: client,
+            ControlPanel(
+                controller: controller,
                 onQuit: { NSApp.terminate(nil) },
                 loginItem: Self.loginItem)
                 .frame(width: 280)
@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Keep the icon in sync with light state. Deliver on DispatchQueue.main
         // (not RunLoop.main) so updates aren't starved by event tracking.
-        iconObserver = client.objectWillChange
+        iconObserver = controller.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.updateStatusButton() }
 
@@ -70,8 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the user steps away, at which point polling naturally stops.
         pollActivity = ProcessInfo.processInfo.beginActivity(
             options: .userInitiatedAllowingIdleSystemSleep,
-            reason: "Poll Hue bridge state")
-        client.startPolling(every: .seconds(1))
+            reason: "Poll light state")
+        controller.startPolling(every: .seconds(1))
     }
 
     /// Login-item control backed by SMAppService. Registering only works from a
@@ -129,38 +129,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         closePanel()
     }
 
-    /// Update the status item's icon and dim it when the bridge is unreachable,
+    /// Update the status item's icon and dim it when the lights are unreachable,
     /// so disconnection reads at a glance even with the panel closed.
     private func updateStatusButton() {
         guard let button = statusItem.button else { return }
         button.image = statusImage
-        button.alphaValue = client.isReachable ? 1 : 0.4
+        button.alphaValue = controller.isReachable ? 1 : 0.4
     }
 
     /// The menu bar icon. Palette rendering keeps the bulb neutral (Primary =
     /// label color) and tints the accent rays with the representative light's
     /// color. The rays fade in with brightness via alpha — transparent when off
-    /// (brightnessFraction 0), fully opaque at 100% — so no separate off state
-    /// is needed. When the bridge is unreachable the icon drops to a plain
-    /// monochrome template (the dimming is applied on the button) rather than
-    /// showing a stale color. A colored NSImage must set `isTemplate = false`,
-    /// otherwise the menu bar flattens it.
+    /// (brightness 0), fully opaque at 100% — so no separate off state is needed.
+    /// When unreachable the icon drops to a plain monochrome template (the
+    /// dimming is applied on the button) rather than showing a stale color. A
+    /// colored NSImage must set `isTemplate = false`, otherwise the menu bar
+    /// flattens it.
     private var statusImage: NSImage {
         let base = NSImage(systemSymbolName: "warninglight.fill",
-                           accessibilityDescription: "Hue lights")
+                           accessibilityDescription: "Lumen")
             ?? NSImage(systemSymbolName: "lightbulb.fill",
-                       accessibilityDescription: "Hue lights")!
+                       accessibilityDescription: "Lumen")!
 
-        guard client.isReachable else {
+        guard controller.isReachable else {
             base.isTemplate = true
             return base
         }
 
-        let light = client.representative
-        let accent = NSColor(hue: light?.hueFraction ?? 0,
-                             saturation: light?.satFraction ?? 0,
+        let light = controller.representative
+        let accent = NSColor(hue: light?.hue ?? 0,
+                             saturation: light?.saturation ?? 0,
                              brightness: 1,
-                             alpha: light?.brightnessFraction ?? 0)
+                             alpha: light?.brightness ?? 0)
         let config = NSImage.SymbolConfiguration(paletteColors: [.labelColor, accent])
         let tinted = base.withSymbolConfiguration(config) ?? base
         tinted.isTemplate = false

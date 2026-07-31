@@ -1,14 +1,16 @@
-// HueControlPanel.swift
-// The shared control UI: bridge setup, light picker, HS color wheel, brightness
-// slider, power. Cross-platform — each app supplies its own window/menu-bar
-// shell and, optionally, a Quit action. No fixed frame here; the shell sizes it.
+// ControlPanel.swift
+// The shared control UI: server setup, light picker, HS color wheel, brightness
+// slider. Cross-platform and provider-neutral — it depends only on
+// LightController and the normalized Light model, never on any vendor detail.
+// Each app supplies its own window/menu-bar shell and, optionally, a Quit action
+// and a login-item control. No fixed frame here; the shell sizes it.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import SwiftUI
-import HueCore
+import LumenCore
 
 /// Injected "launch at login" control. The implementation is platform-specific
-/// (macOS uses SMAppService), so HueUI stays free of ServiceManagement.
+/// (macOS uses SMAppService), so LumenUI stays free of ServiceManagement.
 public struct LoginItem {
     public var isEnabled: () -> Bool
     public var setEnabled: (Bool) -> Void
@@ -19,8 +21,8 @@ public struct LoginItem {
     }
 }
 
-public struct HueControlPanel: View {
-    @ObservedObject private var client: HueClient
+public struct ControlPanel: View {
+    @ObservedObject private var controller: LightController
     private let onQuit: (() -> Void)?
     private let loginItem: LoginItem?
 
@@ -41,57 +43,57 @@ public struct HueControlPanel: View {
     ///     nil on iOS to hide the Quit button.
     ///   - loginItem: supplied by platforms with a login-item API; pass nil to
     ///     hide the "Launch at login" toggle.
-    public init(client: HueClient,
+    public init(controller: LightController,
                 onQuit: (() -> Void)? = nil,
                 loginItem: LoginItem? = nil) {
-        self._client = ObservedObject(wrappedValue: client)
+        self._controller = ObservedObject(wrappedValue: controller)
         self.onQuit = onQuit
         self.loginItem = loginItem
     }
 
-    private var hasSelection: Bool { !client.selection.isEmpty }
+    private var hasSelection: Bool { !controller.selection.isEmpty }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             Divider()
-            // No bridge yet (or the user opened settings) -> show the editor.
-            if client.isConfigured && !showingSettings {
+            // Not configured yet (or the user opened settings) -> show the editor.
+            if controller.isConfigured && !showingSettings {
                 controls
             } else {
-                bridgeSetup
+                serverSetup
             }
         }
         .padding(14)
         .onAppear {
-            urlText = client.baseURL?.absoluteString ?? ""
+            urlText = controller.baseURL?.absoluteString ?? ""
             // Keep first-run setup on screen so it doesn't jump to controls the
             // moment a valid URL auto-applies; the user leaves via the gear.
-            if !client.isConfigured { showingSettings = true }
+            if !controller.isConfigured { showingSettings = true }
             seedFromLiveState()
         }
-        .onChange(of: client.selection) { _ in seedFromLiveState() }
-        // Reseed only when the client adopts fresh bridge state (first load or
+        .onChange(of: controller.selection) { _ in seedFromLiveState() }
+        // Reseed only when the controller adopts fresh state (first load or
         // reconnection); steady-state polls don't bump syncToken, so an edit in
         // progress is never overridden.
-        .onChange(of: client.syncToken) { _ in seedFromLiveState() }
+        .onChange(of: controller.syncToken) { _ in seedFromLiveState() }
     }
 
     @ViewBuilder private var controls: some View {
-        if !client.isReachable {
-            Label(client.lastError ?? "Can't reach the bridge",
+        if !controller.isReachable {
+            Label(controller.lastError ?? "Can't reach the lights",
                   systemImage: "wifi.exclamationmark")
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
-        // Everything that acts on lights is disabled and dimmed while the bridge
-        // is unreachable — those actions would silently fail. The banner, header
+        // Everything that acts on lights is disabled and dimmed while the lights
+        // are unreachable — those actions would silently fail. The banner, header
         // (refresh/settings) and Quit stay usable.
         Group {
             lightPicker
             Divider()
 
-            if client.selectionIsMixed, let rep = client.representative {
+            if controller.selectionIsMixed, let rep = controller.representative {
                 Label("Mixed colors — showing \(rep.name). Drag to unify.",
                       systemImage: "circle.lefthalf.filled")
                     .font(.caption)
@@ -99,7 +101,7 @@ public struct HueControlPanel: View {
             }
 
             ColorWheel(hue: $hue, saturation: $saturation) {
-                client.applyColor(hue: hue, saturation: saturation)
+                controller.applyColor(hue: hue, saturation: saturation)
             }
             .frame(width: 210, height: 210)
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
@@ -107,7 +109,7 @@ public struct HueControlPanel: View {
                 // White is the center of the HS wheel (saturation 0).
                 Button {
                     saturation = 0
-                    client.applyColor(hue: hue, saturation: 0)
+                    controller.applyColor(hue: hue, saturation: 0)
                 } label: {
                     Image(systemName: "drop.halffull")
                 }
@@ -120,16 +122,16 @@ public struct HueControlPanel: View {
 
             brightnessSlider
         }
-        .disabled(!client.isReachable)
-        .opacity(client.isReachable ? 1 : 0.4)
+        .disabled(!controller.isReachable)
+        .opacity(controller.isReachable ? 1 : 0.4)
     }
 
-    // MARK: - Bridge configuration
+    // MARK: - Server configuration
 
-    private var bridgeSetup: some View {
+    private var serverSetup: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("BRIDGE URL").font(.caption).foregroundStyle(.secondary)
-            TextField("https://bridge.example.com", text: $urlText)
+            Text("SERVER URL").font(.caption).foregroundStyle(.secondary)
+            TextField("https://lights.example.com", text: $urlText)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: urlText) { _ in checkURL() }
                 .overlay(alignment: .trailing) {
@@ -172,7 +174,7 @@ public struct HueControlPanel: View {
 
     /// Auto-apply the field: validate, then probe reachability, driving the
     /// status indicator (spinner -> tick/cross). A well-formed URL is applied
-    /// even if unreachable, so the bridge updates as soon as you finish typing.
+    /// even if unreachable, so the server updates as soon as you finish typing.
     private func checkURL() {
         checkTask?.cancel()
         let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,8 +184,8 @@ public struct HueControlPanel: View {
         checkTask = Task {
             try? await Task.sleep(for: .milliseconds(400))   // debounce typing
             if Task.isCancelled { return }
-            client.baseURL = url
-            let ok = await client.checkReachable()
+            controller.baseURL = url
+            let ok = await controller.checkReachable()
             if Task.isCancelled { return }
             urlStatus = ok ? .valid : .invalid
         }
@@ -207,12 +209,12 @@ public struct HueControlPanel: View {
     /// hue/sat/brightness. Runs on open and when the selection changes — never
     /// mid-drag, so it won't fight the user (we don't refresh on every write).
     private func seedFromLiveState() {
-        guard let light = client.representative else { return }
-        hue = light.hueFraction
-        saturation = light.satFraction
+        guard let light = controller.representative else { return }
+        hue = light.hue
+        saturation = light.saturation
         // Only flag a seed when the value actually changes, otherwise onChange
         // won't fire and the guard would swallow the user's next edit.
-        let newBrightness = light.brightnessFraction
+        let newBrightness = light.brightness
         if newBrightness != brightness {
             isSeeding = true
             brightness = newBrightness
@@ -223,11 +225,11 @@ public struct HueControlPanel: View {
 
     private var header: some View {
         HStack {
-            Text("Hue Control").font(.headline)
+            Text("Lumen").font(.headline)
             Spacer()
-            if client.isConfigured {
+            if controller.isConfigured {
                 Button {
-                    Task { await client.refresh() }
+                    Task { await controller.refresh() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -235,13 +237,13 @@ public struct HueControlPanel: View {
                 .help("Refresh")
 
                 Button {
-                    urlText = client.baseURL?.absoluteString ?? ""
+                    urlText = controller.baseURL?.absoluteString ?? ""
                     showingSettings.toggle()
                 } label: {
                     Image(systemName: showingSettings ? "xmark" : "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .help("Bridge settings")
+                .help("Settings")
             }
         }
     }
@@ -249,18 +251,18 @@ public struct HueControlPanel: View {
     private var lightPicker: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("LIGHTS").font(.caption).foregroundStyle(.secondary)
-            if client.lights.isEmpty {
-                Text(client.isReachable ? "No lights found" : "Not connected")
+            if controller.lights.isEmpty {
+                Text(controller.isReachable ? "No lights found" : "Not connected")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(client.lights) { light in
+            ForEach(controller.lights) { light in
                 Button {
                     toggleSelection(light.id)
                 } label: {
                     HStack {
-                        Image(systemName: client.selection.contains(light.id)
+                        Image(systemName: controller.selection.contains(light.id)
                               ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(client.selection.contains(light.id) ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(controller.selection.contains(light.id) ? Color.accentColor : Color.secondary)
                         Text(light.name)
                         Spacer()
                         Text("\(light.brightnessPercent)%")
@@ -285,7 +287,7 @@ public struct HueControlPanel: View {
 
     private var brightnessSlider: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if client.brightnessIsMixed, let rep = client.representative {
+            if controller.brightnessIsMixed, let rep = controller.representative {
                 Label("Mixed brightness — showing \(rep.name). Drag to unify.",
                       systemImage: "circle.lefthalf.filled")
                     .font(.caption)
@@ -301,7 +303,7 @@ public struct HueControlPanel: View {
                 Slider(value: $brightness, in: 0...1)
                     .onChange(of: brightness) { _ in
                         if isSeeding { isSeeding = false; return }
-                        client.applyBrightness(brightness)
+                        controller.applyBrightness(brightness)
                     }
 
                 Button { brightness = 1 } label: {
@@ -315,10 +317,10 @@ public struct HueControlPanel: View {
     }
 
     private func toggleSelection(_ id: String) {
-        if client.selection.contains(id) {
-            client.selection.remove(id)
+        if controller.selection.contains(id) {
+            controller.selection.remove(id)
         } else {
-            client.selection.insert(id)
+            controller.selection.insert(id)
         }
     }
 }

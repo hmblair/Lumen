@@ -1,7 +1,7 @@
 # HueBar — build and packaging.
 # Author: Hamish M. Blair <hmblair@stanford.edu>
 
-APP_NAME  := HueBar
+APP_NAME  := Lumen
 APP_DIR   := .build/$(APP_NAME).app
 MACOS_DIR := $(APP_DIR)/Contents/MacOS
 
