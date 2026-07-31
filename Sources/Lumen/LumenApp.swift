@@ -103,7 +103,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func openPanel() {
         guard let buttonWindow = statusItem.button?.window else { return }
         panel.present(below: buttonWindow.frame)
-        statusItem.button?.highlight(true)
+        // Deferred: applying the highlight inside the click action gets
+        // undone a moment later when the button's own mouse tracking ends;
+        // one runloop turn later it sticks.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.statusItem.button?.highlight(self.panel.isVisible)
+        }
 
         // Menus also dismiss on outside clicks that don't move key status
         // (the desktop, another status item). Global monitors never see this
@@ -137,6 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let button = statusItem.button else { return }
         button.image = statusImage
         button.alphaValue = controller.isReachable ? 1 : 0.4
+        // Re-assigning the image clears the button's pressed state, which
+        // made the menu-open highlight flash and vanish at the next poll
+        // tick; keep it in step with the panel.
+        button.highlight(panel?.isVisible ?? false)
     }
 
     /// The menu bar icon. Palette rendering keeps the bulb neutral (Primary =
