@@ -102,24 +102,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// The menu bar icon. Palette rendering keeps the bulb neutral (Primary =
-    /// label color) and tints only the accent rays from the representative light
-    /// — the same hue/sat/brightness that drives its swatch. A colored NSImage
-    /// must set `isTemplate = false`, otherwise the menu bar flattens it.
+    /// label color) and tints the accent rays with the representative light's
+    /// color. The rays fade in with brightness via alpha — transparent when off
+    /// (brightnessFraction 0), fully opaque at 100% — so no separate off state
+    /// is needed. A colored NSImage must set `isTemplate = false`, otherwise the
+    /// menu bar flattens it.
     private var statusImage: NSImage {
         let base = NSImage(systemSymbolName: "warninglight.fill",
                            accessibilityDescription: "Hue lights")
             ?? NSImage(systemSymbolName: "lightbulb.fill",
                        accessibilityDescription: "Hue lights")!
 
-        guard let light = client.representative, light.on else {
-            base.isTemplate = true
-            return base
-        }
-
-        let value = max(0.55, light.brightnessFraction)
-        let accent = NSColor(hue: light.hueFraction,
-                             saturation: light.satFraction,
-                             brightness: value, alpha: 1)
+        let light = client.representative
+        let accent = NSColor(hue: light?.hueFraction ?? 0,
+                             saturation: light?.satFraction ?? 0,
+                             brightness: 1,
+                             alpha: light?.brightnessFraction ?? 0)
         let config = NSImage.SymbolConfiguration(paletteColors: [.labelColor, accent])
         let tinted = base.withSymbolConfiguration(config) ?? base
         tinted.isTemplate = false
