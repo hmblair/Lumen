@@ -45,12 +45,15 @@ pub struct Light {
 }
 
 /// A normalized partial state update (any subset of the four keys).
+/// `transition` (seconds) asks the light to fade to the target rather than
+/// jump; it's used by effects internally and not exposed over the HTTP API.
 #[derive(Default, Clone)]
 pub struct StateUpdate {
     pub on: Option<bool>,
     pub hue: Option<f64>,
     pub saturation: Option<f64>,
     pub level: Option<f64>,
+    pub transition: Option<f64>,
 }
 
 pub struct Bridge {
@@ -269,6 +272,10 @@ fn denormalize(state: &StateUpdate) -> Value {
         // 1 is the floor: clients express "off" as {"on": false}, never level 0.
         body.insert("bri".into(), json!(((level * 254.0).round() as i64).clamp(1, 254)));
     }
+    if let Some(transition) = state.transition {
+        // Hue transitiontime is in 100 ms units.
+        body.insert("transitiontime".into(), json!((transition * 10.0).round() as i64));
+    }
     Value::Object(body)
 }
 
@@ -310,6 +317,7 @@ mod tests {
             hue: Some(0.0),
             saturation: Some(1.0),
             level: Some(1.0),
+            ..Default::default()
         });
         assert_eq!(body, json!({"on": true, "hue": 0, "sat": 254, "bri": 254}));
     }

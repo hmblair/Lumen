@@ -20,11 +20,34 @@ through synchronously and patch the cache optimistically.
 | Endpoint | Body / response |
 |----------|-----------------|
 | `GET /lights` | `{"lights": [{id, name, on, hue, saturation, level, reachable}]}`; **502** while the bridge is unreachable |
-| `PUT /lights/<id>` | any subset of `{on, hue, saturation, level}`; `{"ok": true}` |
-| `GET /status` | `{"running": null}` — phase-2 scheduler placeholder: will report the effect that owns lights so clients can grey out manual control |
+| `PUT /lights/<id>` | any subset of `{on, hue, saturation, level}`; **409** while a running scene owns the light |
+| `GET /scenes` | `{"scenes": {name: {duration, points}}}` |
+| `PUT /scenes/<name>` | `{duration, points: [{t, hue, saturation, level}]}` — upsert |
+| `DELETE /scenes/<name>` | **409** while a schedule references it |
+| `POST /scenes/<name>/run` | optional `{"targets": [ids]}` — run now |
+| `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, targets, enabled}}}` |
+| `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist) |
+| `DELETE /schedules/<name>` | |
+| `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
+| `POST /stop` | `{"stopped": name \| null}` — release manual control |
 
 `level` is device brightness independent of `on`; clients express "off" as
-`{"on": false}` (level 0 is never sent).
+`{"on": false}` (level 0 is never sent to /lights).
+
+**Scenes** are named curves: points on a 0...1 timeline, interpolated per
+channel and stepped over `duration` seconds. A solid color is the one-point,
+zero-duration case; a point with `level: 0` means off. `sunrise`/`sunset`
+are seeded presets in the same format (huectl's field-tested keyframes),
+stored in `~/.config/lumen/scenes.json` and editable like any user scene.
+
+**Schedules** fire a scene at `at` (`"HH:MM"`, box-local) on `days`
+(`["mon"..."sun"]`) or once on a date (`on: "YYYY-MM-DD"`, self-deleting),
+optionally restricted to `targets`. Stored in
+`~/.config/lumen/schedules.json`.
+
+**Arbitration** is schedule-wins: while a timed scene runs it owns its
+targets — manual writes to them 409 until the scene finishes or `POST /stop`.
+An instant (0-duration) scene releases as soon as its write lands.
 
 ## Configuration
 

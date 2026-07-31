@@ -65,6 +65,25 @@ impl LightCache {
         Ok(())
     }
 
+    /// Apply one update to several lights (all cached lights when `targets`
+    /// is empty). Used by effects; per-light failures are logged and skipped
+    /// so one unreachable lamp doesn't stall a running effect.
+    pub async fn apply_many(&self, targets: &[String], state: &StateUpdate) {
+        let ids: Vec<String> = if targets.is_empty() {
+            match self.snapshot().await {
+                Some(lights) => lights.iter().map(|l| l.id.clone()).collect(),
+                None => return,
+            }
+        } else {
+            targets.to_vec()
+        };
+        for id in ids {
+            if let Err(e) = self.apply(&id, state).await {
+                warn!("Effect write to light {id} failed: {e}");
+            }
+        }
+    }
+
     /// Poll forever; logs only reachability transitions, not every failure.
     pub fn spawn_poll_loop(self: &Arc<Self>) {
         let cache = Arc::clone(self);

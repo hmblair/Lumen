@@ -1,9 +1,7 @@
-//! lumen-daemon entry point: start the poll task, serve the HTTP API.
+//! lumen-daemon entry point: start the poll task and the scheduler, serve
+//! the HTTP API.
 //!
 //! Listens on 127.0.0.1 only; Caddy provides TLS and the public name.
-//! Behavior-identical Rust port of the Python daemon (daemon/); same config
-//! file, same env vars, same endpoints, so the two are drop-in swappable
-//! behind the same systemd unit.
 //!
 //! Author: Hamish M. Blair <hmblair@stanford.edu>
 
@@ -11,6 +9,10 @@ mod api;
 mod bridge;
 mod cache;
 mod config;
+mod runner;
+mod scenes;
+mod scheduler;
+mod store;
 
 use std::sync::Arc;
 
@@ -22,10 +24,21 @@ const DEFAULT_PORT: u16 = 8600;
 async fn main() {
     tracing_subscriber::fmt().init();
     let config = config::load(); // exits with a clear message on missing config
+    let data_dir = config::config_path().parent().expect("config has a dir").to_path_buf();
 
     let bridge = Arc::new(bridge::Bridge::new(config));
     let cache = Arc::new(cache::LightCache::new(bridge));
     cache.spawn_poll_loop();
+
+    let scenes = Arc::new(store::Store::load(
+        data_dir.join("scenes.json"),
+        scenes::default_scenes(),
+    ));
+    let schedules = Arc::new(store::Store::load(data_dir.join("schedules.json"), Default::default()));
+    let runner = Arc::new(runner::SceneRunner::new(Arc::clone(&cache)));
+    scheduler::spawn_scheduler(Arc::clone(&schedules), Arc::clone(&scenes), Arc::clone(&runner));
+
+    let state = api::AppState { cache, runner, scenes, schedules };
 
     let port = std::env::var("LUMEN_DAEMON_PORT")
         .ok()
@@ -36,5 +49,5 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("failed to bind 127.0.0.1:{port}: {e}"));
     info!("lumen-daemon listening on http://127.0.0.1:{port}");
-    axum::serve(listener, api::router(cache)).await.unwrap();
+    axum::serve(listener, api::router(state)).await.unwrap();
 }
