@@ -16,6 +16,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import ServiceManagement
 import HueCore
 import HueUI
 
@@ -48,7 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateStatusButton()
 
         panel = MenuPanel(rootView:
-            HueControlPanel(client: client, onQuit: { NSApp.terminate(nil) })
+            HueControlPanel(
+                client: client,
+                onQuit: { NSApp.terminate(nil) },
+                loginItem: Self.loginItem)
                 .frame(width: 280)
         )
         panel.delegate = self
@@ -68,6 +72,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             options: .userInitiatedAllowingIdleSystemSleep,
             reason: "Poll Hue bridge state")
         client.startPolling(every: .seconds(1))
+    }
+
+    /// Login-item control backed by SMAppService. Registering only works from a
+    /// proper .app bundle (see `make app`), not from `swift run`; a failure
+    /// leaves the toggle reflecting the real (still-disabled) status.
+    private static var loginItem: LoginItem {
+        LoginItem(
+            isEnabled: { SMAppService.mainApp.status == .enabled },
+            setEnabled: { enabled in
+                do {
+                    if enabled { try SMAppService.mainApp.register() }
+                    else { try SMAppService.mainApp.unregister() }
+                } catch {
+                    NSLog("Login item update failed: \(error.localizedDescription)")
+                }
+            })
     }
 
     @objc private func togglePanel() {

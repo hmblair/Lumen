@@ -7,9 +7,22 @@
 import SwiftUI
 import HueCore
 
+/// Injected "launch at login" control. The implementation is platform-specific
+/// (macOS uses SMAppService), so HueUI stays free of ServiceManagement.
+public struct LoginItem {
+    public var isEnabled: () -> Bool
+    public var setEnabled: (Bool) -> Void
+
+    public init(isEnabled: @escaping () -> Bool, setEnabled: @escaping (Bool) -> Void) {
+        self.isEnabled = isEnabled
+        self.setEnabled = setEnabled
+    }
+}
+
 public struct HueControlPanel: View {
     @ObservedObject private var client: HueClient
     private let onQuit: (() -> Void)?
+    private let loginItem: LoginItem?
 
     @State private var hue = 0.08
     @State private var saturation = 0.6
@@ -23,11 +36,17 @@ public struct HueControlPanel: View {
 
     private enum URLStatus { case none, checking, valid, invalid }
 
-    /// - Parameter onQuit: supplied by platforms that can quit (macOS menu bar);
-    ///   pass nil on iOS to hide the Quit button.
-    public init(client: HueClient, onQuit: (() -> Void)? = nil) {
+    /// - Parameters:
+    ///   - onQuit: supplied by platforms that can quit (macOS menu bar); pass
+    ///     nil on iOS to hide the Quit button.
+    ///   - loginItem: supplied by platforms with a login-item API; pass nil to
+    ///     hide the "Launch at login" toggle.
+    public init(client: HueClient,
+                onQuit: (() -> Void)? = nil,
+                loginItem: LoginItem? = nil) {
         self._client = ObservedObject(wrappedValue: client)
         self.onQuit = onQuit
+        self.loginItem = loginItem
     }
 
     private var hasSelection: Bool { !client.selection.isEmpty }
@@ -116,6 +135,14 @@ public struct HueControlPanel: View {
                 .overlay(alignment: .trailing) {
                     urlStatusIcon.padding(.trailing, 6)
                 }
+            if let loginItem {
+                Toggle("Launch at login", isOn: Binding(
+                    get: loginItem.isEnabled,
+                    set: loginItem.setEnabled))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .font(.caption)
+            }
             if let onQuit {
                 Button { onQuit() } label: {
                     Image(systemName: "power.circle")
