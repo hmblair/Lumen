@@ -53,6 +53,10 @@ public final class HueClient: ObservableObject {
     @Published public var selection: Set<String> = []
     @Published public private(set) var lastError: String?
 
+    /// Whether the most recent bridge request (read or write) succeeded. Drives
+    /// the disconnected hint so a failed write isn't silently swallowed.
+    @Published public private(set) var isReachable = true
+
     /// Bridge base URL, persisted to `UserDefaults`. `nil` until the user
     /// configures it — there is no built-in default.
     @Published public var baseURL: URL? {
@@ -64,6 +68,10 @@ public final class HueClient: ObservableObject {
     private let session: URLSession
     private let defaults: UserDefaults
     private let baseURLKey = "HueBridgeBaseURL"
+
+    /// Short per-request timeout so an unreachable bridge surfaces quickly; the
+    /// URLSession default is 60s.
+    private let requestTimeout: TimeInterval = 5
 
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
     /// bridge or a stub without touching this type.
@@ -127,10 +135,11 @@ public final class HueClient: ObservableObject {
     public func refresh() async {
         guard let baseURL else { lastError = "No bridge configured"; return }
         do {
-            let (data, _) = try await session.data(
-                from: baseURL.appendingPathComponent("lights"))
+            var request = URLRequest(url: baseURL.appendingPathComponent("lights"))
+            request.timeoutInterval = requestTimeout
+            let (data, _) = try await session.data(for: request)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                lastError = "Unexpected response"
+                lastError = "Unexpected response from the bridge"
                 return
             }
             var parsed: [Light] = []
@@ -148,9 +157,11 @@ public final class HueClient: ObservableObject {
             }
             lights = parsed.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
             if selection.isEmpty { selection = Set(lights.map(\.id)) }
+            isReachable = true
             lastError = nil
         } catch {
-            lastError = error.localizedDescription
+            isReachable = false
+            lastError = "Can't reach the bridge"
         }
     }
 
@@ -203,7 +214,9 @@ public final class HueClient: ObservableObject {
 
     private func send(_ body: [String: Any], to ids: [String]) async {
         guard !ids.isEmpty, let baseURL else { return }
-        await withTaskGroup(of: Void.self) { group in
+        let timeout = requestTimeout
+        var anyFailed = false
+        await withTaskGroup(of: Bool.self) { group in
             for id in ids {
                 group.addTask { [baseURL, session] in
                     var req = URLRequest(
@@ -211,9 +224,16 @@ public final class HueClient: ObservableObject {
                     req.httpMethod = "PUT"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-                    _ = try? await session.data(for: req)
+                    req.timeoutInterval = timeout
+                    do { _ = try await session.data(for: req); return true }
+                    catch { return false }
                 }
             }
+            for await ok in group where !ok { anyFailed = true }
         }
+        // A failed write is otherwise invisible: the optimistic update already
+        // changed the UI, so surface the disconnect.
+        isReachable = !anyFailed
+        lastError = anyFailed ? "Can't reach the bridge" : nil
     }
 }

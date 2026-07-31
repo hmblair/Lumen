@@ -51,6 +51,12 @@ public struct HueControlPanel: View {
     }
 
     @ViewBuilder private var controls: some View {
+        if !client.isReachable {
+            Label(client.lastError ?? "Can't reach the bridge",
+                  systemImage: "wifi.exclamationmark")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
         lightPicker
         Divider()
 
@@ -164,8 +170,9 @@ public struct HueControlPanel: View {
     private var lightPicker: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("LIGHTS").font(.caption).foregroundStyle(.secondary)
-            if let err = client.lastError {
-                Text(err).font(.caption).foregroundStyle(.red)
+            if client.lights.isEmpty {
+                Text(client.isReachable ? "No lights found" : "Not connected")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(client.lights) { light in
                 Button {
