@@ -53,9 +53,15 @@ public final class HueClient: ObservableObject {
     @Published public var selection: Set<String> = []
     @Published public private(set) var lastError: String?
 
-    /// Whether the most recent bridge request (read or write) succeeded. Drives
-    /// the disconnected hint so a failed write isn't silently swallowed.
+    /// Whether the bridge is reachable, per the polling heartbeat. Only flips to
+    /// false after several consecutive failed polls, so a transient blip (e.g. a
+    /// write colliding with a poll) doesn't make the hint flicker.
     @Published public private(set) var isReachable = true
+
+    /// Bumps whenever the client adopts fresh bridge state — first load or a
+    /// reconnection. The panel reseeds on change. Steady-state polls don't bump
+    /// it, so optimistic edits are never overridden while connected.
+    @Published public private(set) var syncToken = 0
 
     /// Bridge base URL, persisted to `UserDefaults`. `nil` until the user
     /// configures it — there is no built-in default.
@@ -72,6 +78,12 @@ public final class HueClient: ObservableObject {
     /// Short per-request timeout so an unreachable bridge surfaces quickly; the
     /// URLSession default is 60s.
     private let requestTimeout: TimeInterval = 5
+
+    /// Consecutive failed polls before the bridge is considered unreachable — a
+    /// grace period so a single dropped request doesn't flip the UI.
+    private let disconnectThreshold = 3
+    private var failedPolls = 0
+    private var hasSynced = false
 
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
     /// bridge or a stub without touching this type.
@@ -177,13 +189,25 @@ public final class HueClient: ObservableObject {
                     sat: state["sat"] as? Int ?? 0,
                     reachable: state["reachable"] as? Bool ?? false))
             }
-            lights = parsed.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
-            if selection.isEmpty { selection = Set(lights.map(\.id)) }
+            // Adopt bridge state only on first load or a reconnection — never
+            // during steady-state polling, so a poll that lands before a write
+            // has propagated can't revert an optimistic edit.
+            let reconnected = !isReachable
+            failedPolls = 0
             isReachable = true
             lastError = nil
+            if reconnected || !hasSynced {
+                hasSynced = true
+                lights = parsed.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+                if selection.isEmpty { selection = Set(lights.map(\.id)) }
+                syncToken += 1
+            }
         } catch {
-            isReachable = false
-            lastError = "Can't reach the bridge"
+            failedPolls += 1
+            if failedPolls >= disconnectThreshold {
+                isReachable = false
+                lastError = "Can't reach the bridge"
+            }
         }
     }
 
@@ -234,11 +258,14 @@ public final class HueClient: ObservableObject {
         }
     }
 
+    // Fire-and-forget. Reachability is judged solely by the polling heartbeat,
+    // not by writes: a write can fail transiently (colliding with a poll, bridge
+    // briefly busy) while the bridge is fine, and letting that flip the UI made
+    // the disconnected hint flicker during drags.
     private func send(_ body: [String: Any], to ids: [String]) async {
         guard !ids.isEmpty, let baseURL else { return }
         let timeout = requestTimeout
-        var anyFailed = false
-        await withTaskGroup(of: Bool.self) { group in
+        await withTaskGroup(of: Void.self) { group in
             for id in ids {
                 group.addTask { [baseURL, session] in
                     var req = URLRequest(
@@ -247,15 +274,9 @@ public final class HueClient: ObservableObject {
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.httpBody = try? JSONSerialization.data(withJSONObject: body)
                     req.timeoutInterval = timeout
-                    do { _ = try await session.data(for: req); return true }
-                    catch { return false }
+                    _ = try? await session.data(for: req)
                 }
             }
-            for await ok in group where !ok { anyFailed = true }
         }
-        // A failed write is otherwise invisible: the optimistic update already
-        // changed the UI, so surface the disconnect.
-        isReachable = !anyFailed
-        lastError = anyFailed ? "Can't reach the bridge" : nil
     }
 }

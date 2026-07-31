@@ -40,14 +40,15 @@ public struct HueControlPanel: View {
             }
         }
         .padding(14)
-        .task {
+        .onAppear {
             urlText = client.baseURL?.absoluteString ?? ""
-            if client.isConfigured {
-                await client.refresh()
-                seedFromLiveState()
-            }
+            seedFromLiveState()
         }
         .onChange(of: client.selection) { _ in seedFromLiveState() }
+        // Reseed only when the client adopts fresh bridge state (first load or
+        // reconnection); steady-state polls don't bump syncToken, so an edit in
+        // progress is never overridden.
+        .onChange(of: client.syncToken) { _ in seedFromLiveState() }
     }
 
     @ViewBuilder private var controls: some View {
