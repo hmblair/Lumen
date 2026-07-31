@@ -6,8 +6,20 @@
 
 import SwiftUI
 import LumenCore
+#if os(macOS)
+import AppKit
+#endif
 
 private let dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+/// Day sets with a nicer name than listing the days.
+private let daySetSummaries: [Set<String>: String] = [
+    Set(dayOrder): "daily",
+    Set(dayOrder.prefix(5)): "weekdays",
+    Set(dayOrder.prefix(5)).union(["sat"]): "weekdays sat",
+    Set(dayOrder.prefix(5)).union(["sun"]): "weekdays sun",
+    ["sat", "sun"]: "weekends",
+]
 
 struct SchedulesView: View {
     @ObservedObject var controller: LightController
@@ -15,14 +27,14 @@ struct SchedulesView: View {
     @State private var editing: EditState?
     @State private var errorMessage: String?
 
-    /// The schedule form's working state; name identifies the schedule being
-    /// edited (existing name = replace, new name = create). Time is kept as
-    /// hour/minute directly — mirroring the daemon's "HH:MM" — because
-    /// SwiftUI's DatePicker renders as a fixed-size capsule on macOS 26 that
-    /// clips its own text and ignores style/frame modifiers.
+    /// The schedule form's working state. Schedules are anonymous in the UI —
+    /// a row is identified by when + what — so the daemon's key is a hidden
+    /// id (UUID for new schedules, whatever key an existing one has). Time is
+    /// kept as hour/minute directly — mirroring the daemon's "HH:MM" —
+    /// because SwiftUI's DatePicker renders as a fixed-size capsule on macOS
+    /// 26 that clips its own text and ignores style/frame modifiers.
     private struct EditState {
-        var name: String
-        var originalName: String?   // nil = creating
+        var key: String?   // nil = creating
         var hour = 7
         var minute = 0
         var days: Set<String> = Set(dayOrder.prefix(5))
@@ -59,7 +71,7 @@ struct SchedulesView: View {
                 Text("SCHEDULES").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    editing = EditState(name: "", scene: defaultSceneName)
+                    editing = EditState(scene: defaultSceneName)
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -87,15 +99,19 @@ struct SchedulesView: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
+            // Grey only the description when disabled — dimming the whole row
+            // made the controls look (and on macOS 26's glass controls,
+            // behave) disabled, wedging the schedule off forever.
             VStack(alignment: .leading, spacing: 1) {
-                Text(name)
-                Text("\(schedule.at) · \(daysSummary(schedule)) · \(schedule.scene)")
+                Text(schedule.scene)
+                Text("\(localizedTime(schedule.at)) · \(daysSummary(schedule))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .opacity(schedule.enabled ? 1 : 0.5)
             Spacer()
             Button {
-                editing = editState(for: name, schedule: schedule)
+                editing = editState(forKey: name, schedule: schedule)
             } label: {
                 Image(systemName: "pencil")
             }
@@ -109,36 +125,49 @@ struct SchedulesView: View {
             .buttonStyle(.borderless)
             .help("Delete")
         }
-        .opacity(schedule.enabled ? 1 : 0.5)
+    }
+
+    /// The daemon's "HH:MM" rendered in the machine's locale (e.g. "7:00 AM"
+    /// in a 12-hour locale, "07:00" in a 24-hour one).
+    private func localizedTime(_ at: String) -> String {
+        let parts = at.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2,
+              let date = Calendar.current.date(bySettingHour: parts[0], minute: parts[1],
+                                               second: 0, of: Date())
+        else { return at }
+        return date.formatted(date: .omitted, time: .shortened)
     }
 
     private func daysSummary(_ schedule: Schedule) -> String {
         if let date = schedule.on { return date }
         let days = Set(schedule.days)
-        if days.count == 7 { return "daily" }
-        if days == Set(dayOrder.prefix(5)) { return "weekdays" }
-        return dayOrder.filter(days.contains).joined(separator: " ")
+        return daySetSummaries[days]
+            ?? dayOrder.filter(days.contains).joined(separator: " ")
     }
 
     // MARK: - Schedule editor
 
     private var editor: some View {
         let binding = Binding(get: { editing! }, set: { editing = $0 })
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(binding.wrappedValue.originalName == nil ? "NEW SCHEDULE" : "EDIT SCHEDULE")
+        // Three unlabeled rows — the controls speak for themselves:
+        // scene, "start to end", days.
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(binding.wrappedValue.key == nil ? "NEW SCHEDULE" : "EDIT SCHEDULE")
                 .font(.caption).foregroundStyle(.secondary)
-            TextField("Name", text: binding.name)
-                .textFieldStyle(.roundedBorder)
-            HStack {
-                // Known cosmetic issue: on macOS 26 the capsule slightly
-                // clips its own text; its size is intrinsic and ignores
-                // style/frame/locale adjustments. Accepted as-is.
-                DatePicker("", selection: timeBinding(binding), displayedComponents: .hourAndMinute)
-                    .labelsHidden()
+            // Scene and times share a row: the time field right-aligns its
+            // digits within a two-digit-wide box, so mid-row (after the
+            // popup) its ragged left edge doesn't read as misalignment.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Picker("", selection: binding.scene) {
                     ForEach(controller.scenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
                 }
                 .labelsHidden()
+                .fixedSize()
+                timeField(binding)
+                if let ends = endTimeText(binding.wrappedValue) {
+                    Text("to").foregroundStyle(.secondary)
+                    Text(ends).foregroundStyle(.secondary)
+                }
             }
             HStack(spacing: 4) {
                 ForEach(dayOrder, id: \.self) { day in
@@ -150,10 +179,34 @@ struct SchedulesView: View {
                 Spacer()
                 Button("Save") { Task { await saveEdit() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(binding.wrappedValue.name.trimmingCharacters(in: .whitespaces).isEmpty
-                              || binding.wrappedValue.days.isEmpty)
+                    .disabled(binding.wrappedValue.days.isEmpty)
             }
         }
+    }
+
+    /// Start + the selected scene's duration, locale-formatted; nil for
+    /// instant (solid) scenes. Notes a wrap past midnight.
+    private func endTimeText(_ state: EditState) -> String? {
+        guard let scene = controller.scenes[state.scene], scene.duration > 0,
+              let start = Calendar.current.date(bySettingHour: state.hour, minute: state.minute,
+                                                second: 0, of: Date())
+        else { return nil }
+        let end = start.addingTimeInterval(scene.duration)
+        let wrapped = !Calendar.current.isDate(end, inSameDayAs: start)
+        return end.formatted(date: .omitted, time: .shortened) + (wrapped ? " (next day)" : "")
+    }
+
+    /// The time control. SwiftUI's DatePicker renders as a fixed-size capsule
+    /// on macOS 26 that clips its own text and ignores every adjustment, so
+    /// on macOS this is the bare AppKit text-field picker instead — the same
+    /// unboxed, stepper-less control Calendar.app uses.
+    @ViewBuilder private func timeField(_ binding: Binding<EditState>) -> some View {
+        #if os(macOS)
+        InlineTimePicker(date: timeBinding(binding))
+        #else
+        DatePicker("", selection: timeBinding(binding), displayedComponents: .hourAndMinute)
+            .labelsHidden()
+        #endif
     }
 
     /// Bridge the DatePicker's Date to the edit state's hour/minute (the
@@ -172,6 +225,82 @@ struct SchedulesView: View {
             })
     }
 
+    #if os(macOS)
+    /// AppKit's text-field date picker (Calendar.app's inline style),
+    /// integrated properly into SwiftUI layout: the control's frame is larger
+    /// than its *alignment rect* (`alignmentRectInsets`) — AppKit lays out by
+    /// the latter, SwiftUI by the former, which reads as phantom padding and
+    /// a drifting baseline. The wrapper reads the control's own metrics and
+    /// compensates with negative padding plus a real firstTextBaseline guide.
+    private struct InlineTimePicker: View {
+        @Binding var date: Date
+        @State private var insets = EdgeInsets()
+        @State private var baselineFromTop: CGFloat?
+
+        var body: some View {
+            BareTimePicker(date: $date, onMetrics: { newInsets, baseline in
+                insets = newInsets
+                baselineFromTop = baseline
+            })
+            .fixedSize()
+            .padding(EdgeInsets(top: -insets.top, leading: -insets.leading,
+                                bottom: -insets.bottom, trailing: -insets.trailing))
+            .alignmentGuide(.firstTextBaseline) { dimensions in
+                baselineFromTop.map { $0 - insets.top } ?? dimensions[VerticalAlignment.center]
+            }
+        }
+    }
+
+    private struct BareTimePicker: NSViewRepresentable {
+        @Binding var date: Date
+        var onMetrics: (EdgeInsets, CGFloat) -> Void
+
+        func makeNSView(context: Context) -> NSDatePicker {
+            let picker = NSDatePicker()
+            picker.datePickerStyle = .textField
+            picker.datePickerElements = .hourMinute
+            picker.isBezeled = false
+            picker.drawsBackground = false
+            picker.font = .systemFont(ofSize: NSFont.systemFontSize)
+            picker.target = context.coordinator
+            picker.action = #selector(Coordinator.changed(_:))
+            picker.dateValue = date
+
+            let insets = picker.alignmentRectInsets
+            let baseline = picker.firstBaselineOffsetFromTop
+            DispatchQueue.main.async {
+                onMetrics(EdgeInsets(top: insets.top, leading: insets.left,
+                                     bottom: insets.bottom, trailing: insets.right),
+                          baseline)
+            }
+            return picker
+        }
+
+        func updateNSView(_ picker: NSDatePicker, context: Context) {
+            context.coordinator.date = $date
+            if picker.dateValue != date {
+                picker.dateValue = date
+            }
+        }
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(date: $date)
+        }
+
+        final class Coordinator: NSObject {
+            var date: Binding<Date>
+
+            init(date: Binding<Date>) {
+                self.date = date
+            }
+
+            @objc func changed(_ sender: NSDatePicker) {
+                date.wrappedValue = sender.dateValue
+            }
+        }
+    }
+    #endif
+
     private func dayToggle(_ day: String, binding: Binding<EditState>) -> some View {
         let selected = binding.wrappedValue.days.contains(day)
         return Button {
@@ -188,9 +317,8 @@ struct SchedulesView: View {
         .help(day)
     }
 
-    private func editState(for name: String, schedule: Schedule) -> EditState {
-        var state = EditState(name: name, scene: schedule.scene)
-        state.originalName = name
+    private func editState(forKey key: String, schedule: Schedule) -> EditState {
+        var state = EditState(key: key, scene: schedule.scene)
         state.days = Set(schedule.days)
         let parts = schedule.at.split(separator: ":").compactMap { Int($0) }
         if parts.count == 2 {
@@ -202,18 +330,14 @@ struct SchedulesView: View {
 
     private func saveEdit() async {
         guard let state = editing else { return }
-        let name = state.name.trimmingCharacters(in: .whitespaces)
         let schedule = Schedule(
             at: String(format: "%02d:%02d", state.hour, state.minute),
             days: dayOrder.filter(state.days.contains),
             scene: state.scene)
-        if let error = await controller.save(schedule: schedule, named: name) {
+        if let error = await controller.save(schedule: schedule,
+                                             named: state.key ?? UUID().uuidString) {
             errorMessage = error
             return
-        }
-        // Renaming = upsert under the new name + delete the old one.
-        if let original = state.originalName, original != name {
-            await controller.deleteSchedule(named: original)
         }
         errorMessage = nil
         editing = nil
