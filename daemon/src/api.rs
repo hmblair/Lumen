@@ -363,10 +363,28 @@ async fn post_group(State(state): State<AppState>, body: Bytes) -> ApiResponse {
         Ok(lights) => lights,
         Err(response) => return response,
     };
+    if let Some(response) = group_name_taken(&state, &name, None).await {
+        return response;
+    }
     match state.cache.create_group(&name, &lights).await {
         Ok(id) => (StatusCode::OK, Json(json!({ "ok": true, "id": id }))),
         Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
+}
+
+/// Group names are unique (the bridge itself doesn't enforce this):
+/// case-insensitive, optionally ignoring one group (the one being renamed).
+async fn group_name_taken(state: &AppState, name: &str, ignore: Option<&str>) -> Option<ApiResponse> {
+    let groups = state.cache.groups().await?;
+    let clash = groups.iter().any(|g| {
+        Some(g.id.as_str()) != ignore && g.name.eq_ignore_ascii_case(name)
+    });
+    clash.then(|| {
+        error(
+            StatusCode::CONFLICT,
+            &format!("a group named '{name}' already exists"),
+        )
+    })
 }
 
 async fn put_group(
@@ -402,7 +420,12 @@ async fn put_group(
                 None => return bad_value(key),
             },
             "name" => match parse_group_name(value) {
-                Ok(name) => new_name = Some(name),
+                Ok(name) => {
+                    if let Some(response) = group_name_taken(&state, &name, Some(&group_id)).await {
+                        return response;
+                    }
+                    new_name = Some(name);
+                }
                 Err(response) => return response,
             },
             "lights" => match parse_group_lights(&state, value).await {
