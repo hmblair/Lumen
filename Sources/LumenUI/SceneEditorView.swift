@@ -435,13 +435,18 @@ struct SceneEditorView: View {
         await restoreAfterPreview()
     }
 
-    /// Restore the snapshot once the preview scene has released its lights
-    /// (restoring earlier would be 409'd by the daemon's arbitration).
+    /// Restore the snapshot once the preview scene has released its lights —
+    /// restoring earlier would be 409'd by the daemon's arbitration. If the
+    /// run somehow outlives its schedule, stop it rather than skip the
+    /// restore: a preview must never leave the lights changed.
     private func restoreAfterPreview() async {
         guard let snapshot = previewSnapshot else { return }
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(5)
         while controller.running?.scene == "Preview", Date() < deadline {
             try? await Task.sleep(for: .milliseconds(200))
+        }
+        if controller.running?.scene == "Preview" {
+            await controller.stopScene()
         }
         controller.restoreLights(snapshot)
         previewSnapshot = nil

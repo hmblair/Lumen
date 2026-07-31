@@ -26,10 +26,11 @@ use crate::bridge::StateUpdate;
 use crate::cache::LightCache;
 use crate::store::Store;
 
-/// Steps a timed scene is sampled at (huectl's value).
+/// Most steps a timed scene is sampled at (huectl's value).
 const CURVE_STEPS: u32 = 120;
-/// Per-step fade so the curve reads as continuous rather than stepped.
-const STEP_FADE_SECS: f64 = 0.5;
+/// Floor on the step interval so short scenes don't hammer the bridge (a
+/// 15 s preview steps every 0.5 s, not every 0.125 s).
+const MIN_STEP_SECS: f64 = 0.5;
 /// Levels at or below this are "off".
 const OFF_THRESHOLD: f64 = 1e-9;
 
@@ -93,20 +94,32 @@ impl Scene {
 
     /// Run to completion or cancellation, writing through the cache so
     /// clients polling /lights see the scene's progress.
+    ///
+    /// Paced by wall clock: each step sleeps *until* its scheduled moment
+    /// rather than sleeping a fixed interval after its writes, so bridge
+    /// write latency doesn't stretch the scene past its duration (a 15 s
+    /// preview must take 15 s — clients sync UI to that). Steps fade over
+    /// one interval, so the curve reads as continuous at any step rate.
     pub async fn run(self, cache: Arc<LightCache>, cancel: CancellationToken) {
         if self.duration <= 0.0 {
             self.apply_frame(&cache, 1.0, None).await;
             return;
         }
-        let interval = self.duration / CURVE_STEPS as f64;
-        for i in 0..=CURVE_STEPS {
+        let interval = (self.duration / CURVE_STEPS as f64).max(MIN_STEP_SECS);
+        let steps = (self.duration / interval).ceil().max(1.0) as u32;
+        let start = tokio::time::Instant::now();
+        for i in 0..=steps {
             if cancel.is_cancelled() {
                 return;
             }
-            self.apply_frame(&cache, i as f64 / CURVE_STEPS as f64, Some(STEP_FADE_SECS)).await;
+            self.apply_frame(&cache, i as f64 / steps as f64, Some(interval)).await;
+            if i == steps {
+                return;
+            }
+            let target = start + Duration::from_secs_f64(interval * (i + 1) as f64);
             let cancelled = tokio::select! {
                 _ = cancel.cancelled() => true,
-                _ = tokio::time::sleep(Duration::from_secs_f64(interval)) => false,
+                _ = tokio::time::sleep_until(target) => false,
             };
             if cancelled {
                 return;
