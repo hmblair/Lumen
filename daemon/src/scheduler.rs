@@ -38,11 +38,9 @@ pub struct Schedule {
     /// One-shot date "YYYY-MM-DD"; the schedule deletes itself after firing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on: Option<String>,
-    /// Name of the scene to run.
+    /// Name of the scene to run. The scene carries everything about *what*
+    /// happens, including which lights; a schedule is time-only.
     pub scene: String,
-    /// Target light ids; empty = all lights.
-    #[serde(default)]
-    pub targets: Vec<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -121,9 +119,11 @@ pub fn spawn_scheduler(
                 match scenes.get(&schedule.scene).await {
                     Some(scene) => {
                         info!("Schedule '{name}' firing scene '{}'", schedule.scene);
-                        runner
-                            .run(&schedule.scene, scene, Some(name.clone()), schedule.targets.clone())
-                            .await;
+                        if let Err(running) =
+                            runner.run(&schedule.scene, scene, Some(name.clone())).await
+                        {
+                            warn!("Schedule '{name}' skipped: scene '{running}' is still running");
+                        }
                     }
                     None => warn!("Schedule '{name}' references missing scene '{}'", schedule.scene),
                 }
@@ -147,7 +147,6 @@ mod tests {
             days: days.iter().map(|d| d.to_string()).collect(),
             on: None,
             scene: "sunrise".into(),
-            targets: vec![],
             enabled: true,
         }
     }

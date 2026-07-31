@@ -111,8 +111,10 @@ menu bar icon when the lights are unreachable, and reseeds only on reconnect.
 - Set the server URL (the daemon, e.g. `https://lumen.hmblair.com`) via the
   panel's settings (gear button). The raw bridge passthrough at
   `lights.hmblair.com` remains for debugging but the app no longer uses it.
-- Phase 2: migrate huectl's scheduler and effects (sunrise etc.) into the
-  daemon, add schedule CRUD + a schedules screen, and drive the "schedule
-  running — manual control paused" UI from `GET /status`.
+- Scenes (per-light color/brightness programs; sunrise/sunset presets) and
+  time-only schedules live on the daemon and are managed from the panel's
+  calendar screen; while a scene runs, manual control pauses (banner + Stop).
+  Next: an axis-style curve editor for authoring multi-point scenes in-app,
+  and spline interpolation to go with it.
 - A `ControlWidget` could add a quick on/off toggle to Control Center; the color
   wheel has to stay in the menu bar.

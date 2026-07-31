@@ -30,11 +30,10 @@ async fn main() {
     let cache = Arc::new(cache::LightCache::new(bridge));
     cache.spawn_poll_loop();
 
-    let scenes = Arc::new(store::Store::load(
-        data_dir.join("scenes.json"),
-        scenes::default_scenes(),
-    ));
+    let scenes = Arc::new(store::Store::load(data_dir.join("scenes.json"), Default::default()));
     let schedules = Arc::new(store::Store::load(data_dir.join("schedules.json"), Default::default()));
+    // Presets need real light ids, so they seed once the bridge is first seen.
+    scenes::spawn_preset_seeder(Arc::clone(&scenes), Arc::clone(&cache));
     let runner = Arc::new(runner::SceneRunner::new(Arc::clone(&cache)));
     scheduler::spawn_scheduler(Arc::clone(&schedules), Arc::clone(&scenes), Arc::clone(&runner));
 

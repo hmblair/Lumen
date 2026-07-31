@@ -11,14 +11,20 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use chrono::{DateTime, Local};
-use serde::Serialize;
+use chrono::{DateTime, Local, SecondsFormat};
+use serde::{Serialize, Serializer};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::cache::LightCache;
 use crate::scenes::Scene;
+
+/// Seconds-precision RFC 3339, so Foundation's ISO8601 decoder (which
+/// rejects fractional seconds by default) parses it directly.
+fn rfc3339_secs<S: Serializer>(dt: &DateTime<Local>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+}
 
 /// What /status reports while a scene runs.
 #[derive(Serialize, Clone)]
@@ -29,7 +35,9 @@ pub struct RunningInfo {
     pub schedule: Option<String>,
     /// Owned lights; empty = all lights.
     pub targets: Vec<String>,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub started: DateTime<Local>,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub ends: DateTime<Local>,
 }
 
@@ -54,14 +62,16 @@ impl SceneRunner {
         }
     }
 
-    /// Start `scene`, cancelling any running one.
+    /// Start `scene`. A running scene blocks new runs (schedule-wins,
+    /// uniformly: manual light writes and scene starts both defer to it) —
+    /// the Err carries the running scene's name. The scene itself says which
+    /// lights it touches; those are what it owns.
     pub async fn run(
         self: &Arc<Self>,
         name: &str,
         scene: Scene,
         schedule: Option<String>,
-        targets: Vec<String>,
-    ) {
+    ) -> Result<(), String> {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel = CancellationToken::new();
         let started = Local::now();
@@ -70,16 +80,15 @@ impl SceneRunner {
         let info = RunningInfo {
             scene: name.to_string(),
             schedule,
-            targets: targets.clone(),
+            targets: scene.light_ids(),
             started,
             ends,
         };
 
         {
             let mut current = self.current.lock().await;
-            if let Some(previous) = current.take() {
-                info!("Stopping scene '{}' for '{name}'", previous.info.scene);
-                previous.cancel.cancel();
+            if let Some(running) = current.as_ref() {
+                return Err(running.info.scene.clone());
             }
             *current = Some(Current { info, cancel: cancel.clone(), generation });
         }
@@ -88,13 +97,14 @@ impl SceneRunner {
         let runner = Arc::clone(self);
         let cache = Arc::clone(&self.cache);
         tokio::spawn(async move {
-            scene.run(cache, targets, cancel).await;
+            scene.run(cache, cancel).await;
             // Release ownership — unless a newer run already replaced us.
             let mut current = runner.current.lock().await;
             if current.as_ref().map(|c| c.generation) == Some(generation) {
                 *current = None;
             }
         });
+        Ok(())
     }
 
     /// Stop the running scene, returning its name.
@@ -115,7 +125,7 @@ impl SceneRunner {
     pub async fn owner_of(&self, light_id: &str) -> Option<String> {
         let current = self.current.lock().await;
         let c = current.as_ref()?;
-        let owns = c.info.targets.is_empty() || c.info.targets.iter().any(|t| t == light_id);
+        let owns = c.info.targets.iter().any(|t| t == light_id);
         owns.then(|| c.info.scene.clone())
     }
 }

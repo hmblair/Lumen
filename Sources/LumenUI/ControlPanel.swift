@@ -33,6 +33,7 @@ public struct ControlPanel: View {
 
     @State private var urlText = ""
     @State private var showingSettings = false
+    @State private var showingSchedules = false
     @State private var urlStatus: URLStatus = .none
     @State private var checkTask: Task<Void, Never>?
 
@@ -57,11 +58,16 @@ public struct ControlPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             Divider()
-            // Not configured yet (or the user opened settings) -> show the editor.
-            if controller.isConfigured && !showingSettings {
-                controls
-            } else {
+            // Not configured yet (or the user opened settings) -> the editor;
+            // otherwise the schedules screen or the main controls.
+            if !controller.isConfigured || showingSettings {
                 serverSetup
+            } else if showingSchedules {
+                runningBanner
+                SchedulesView(controller: controller,
+                              currentColor: { (hue, saturation, brightness) })
+            } else {
+                controls
             }
         }
         .padding(14)
@@ -79,6 +85,32 @@ public struct ControlPanel: View {
         .onChange(of: controller.syncToken) { _ in seedFromLiveState() }
     }
 
+    /// While a scene runs, manual control pauses (schedule-wins): the daemon
+    /// would 409 the writes anyway, so the UI says so up front.
+    @ViewBuilder private var runningBanner: some View {
+        if let running = controller.running {
+            HStack {
+                Label(runningLabel(running), systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Stop") {
+                    Task { await controller.stopScene() }
+                }
+                .controlSize(.small)
+            }
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.12)))
+        }
+    }
+
+    private func runningLabel(_ running: RunningInfo) -> String {
+        let scene = "'\(running.scene)' running"
+        guard running.ends > Date() else { return scene }
+        let time = running.ends.formatted(date: .omitted, time: .shortened)
+        return "\(scene) until \(time)"
+    }
+
     @ViewBuilder private var controls: some View {
         if !controller.isReachable {
             Label(controller.lastError ?? "Can't reach the lights",
@@ -86,9 +118,10 @@ public struct ControlPanel: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
+        runningBanner
         // Everything that acts on lights is disabled and dimmed while the lights
-        // are unreachable — those actions would silently fail. The banner, header
-        // (refresh/settings) and Quit stay usable.
+        // are unreachable (writes would silently fail) or while a scene owns
+        // them (writes would 409). The banner, header, and Quit stay usable.
         Group {
             lightPicker
             Divider()
@@ -122,8 +155,8 @@ public struct ControlPanel: View {
 
             brightnessSlider
         }
-        .disabled(!controller.isReachable)
-        .opacity(controller.isReachable ? 1 : 0.4)
+        .disabled(!controller.isReachable || controller.running != nil)
+        .opacity(controller.isReachable && controller.running == nil ? 1 : 0.4)
     }
 
     // MARK: - Server configuration
@@ -237,7 +270,17 @@ public struct ControlPanel: View {
                 .help("Refresh")
 
                 Button {
+                    showingSettings = false
+                    showingSchedules.toggle()
+                } label: {
+                    Image(systemName: showingSchedules ? "xmark" : "calendar.badge.clock")
+                }
+                .buttonStyle(.borderless)
+                .help("Schedules & scenes")
+
+                Button {
                     urlText = controller.baseURL?.absoluteString ?? ""
+                    showingSchedules = false
                     showingSettings.toggle()
                 } label: {
                     Image(systemName: showingSettings ? "xmark" : "gearshape")

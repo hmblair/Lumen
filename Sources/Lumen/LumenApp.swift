@@ -24,7 +24,8 @@ import LumenUI
 struct LumenApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    var body: some Scene {
+    // Qualified: LumenCore.Scene (a light scene) shadows SwiftUI.Scene here.
+    var body: some SwiftUI.Scene {
         // No visible window; the status item drives everything.
         Settings { EmptyView() }
     }

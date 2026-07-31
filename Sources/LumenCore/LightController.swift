@@ -62,6 +62,15 @@ public final class LightController: ObservableObject {
     /// it, so optimistic edits are never overridden while connected.
     @Published public private(set) var syncToken = 0
 
+    /// The scene run in progress per the daemon (nil when idle). Drives the
+    /// "scene running" banner and greys out manual control.
+    @Published public private(set) var running: RunningInfo?
+
+    /// Scene and schedule libraries, loaded via loadLibrary() on panel open
+    /// and after mutations (set internally by the scenes extension).
+    @Published public internal(set) var scenes: [String: Scene] = [:]
+    @Published public internal(set) var schedules: [String: Schedule] = [:]
+
     /// Daemon base URL (e.g. https://lumen.hmblair.com), persisted to
     /// `UserDefaults`. `nil` until the user configures it — there is no
     /// built-in default. The key is new as of the daemon migration, so users
@@ -82,7 +91,7 @@ public final class LightController: ObservableObject {
 
     public var isConfigured: Bool { baseURL != nil }
 
-    private let session: URLSession
+    let session: URLSession   // internal: the scenes extension shares it
     private let defaults: UserDefaults
     private let baseURLKey = "LumenServerBaseURL"
 
@@ -179,6 +188,10 @@ public final class LightController: ObservableObject {
         let lights: [Light]
     }
 
+    private struct StatusResponse: Decodable {
+        let running: RunningInfo?
+    }
+
     public func refresh() async {
         guard let baseURL else { lastError = "No source configured"; return }
         do {
@@ -193,14 +206,17 @@ public final class LightController: ObservableObject {
                 throw URLError(.badServerResponse)
             }
             let parsed = try JSONDecoder().decode(LightsResponse.self, from: data).lights
-            // Adopt state only on first load or a reconnection — never during
-            // steady-state polling, so a poll that lands before a write has
-            // propagated can't revert an optimistic edit.
+            let wasRunning = running != nil
+            await refreshStatus()
+            // Adopt state on first load and reconnection as before, and also
+            // while (and just after) a scene runs: manual controls are greyed
+            // out then, so adoption can't clobber an edit, and it keeps the
+            // panel tracking the scene's progress and final state.
             let reconnected = !isReachable
             failedPolls = 0
             isReachable = true
             lastError = nil
-            if reconnected || !hasSynced {
+            if reconnected || !hasSynced || running != nil || wasRunning {
                 hasSynced = true
                 lights = parsed.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
                 if selection.isEmpty { selection = Set(lights.map(\.id)) }
@@ -212,6 +228,22 @@ public final class LightController: ObservableObject {
                 isReachable = false
                 lastError = "Can't reach the lights"
             }
+        }
+    }
+
+    /// Update `running` from GET /status. Failures keep the previous value —
+    /// a dropped status request shouldn't flicker the banner.
+    private func refreshStatus() async {
+        guard let baseURL else { return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("status"))
+        request.timeoutInterval = requestTimeout
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
+        else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let status = try? decoder.decode(StatusResponse.self, from: data) {
+            running = status.running
         }
     }
 

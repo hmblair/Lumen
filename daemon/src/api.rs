@@ -10,16 +10,17 @@
 //!                             light | 409 a running scene owns this light |
 //!                             502 bridge
 //!
-//! Scenes (named curves; a solid color is the one-point, 0-duration case):
-//!   GET    /scenes             -> {"scenes": {name: {duration, points}}}
-//!   PUT    /scenes/{name}      <- {duration, points: [{t, hue, saturation,
-//!                                 level}]} — upsert, validated here
+//! Scenes (named per-light programs; a solid color is a one-point,
+//! 0-duration curve):
+//!   GET    /scenes             -> {"scenes": {name: {duration, lights:
+//!                                 {id: [{t, hue, saturation, level}]}}}}
+//!   PUT    /scenes/{name}      <- same shape — upsert, validated here
 //!   DELETE /scenes/{name}      409 while a schedule references it
-//!   POST   /scenes/{name}/run  <- optional {"targets": [ids]} — run now
+//!   POST   /scenes/{name}/run  run now (the scene says which lights)
 //!
-//! Schedules (fire a scene at a time on chosen days):
+//! Schedules (time-only: fire a scene at a time on chosen days):
 //!   GET    /schedules          -> {"schedules": {name: {at, days, on?,
-//!                                 scene, targets, enabled}}}
+//!                                 scene, enabled}}}
 //!   PUT    /schedules/{name}   <- upsert, validated (scene must exist)
 //!   DELETE /schedules/{name}
 //!
@@ -186,30 +187,17 @@ async fn delete_scene(State(state): State<AppState>, Path(name): Path<String>) -
     }
 }
 
-async fn run_scene(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    body: Bytes,
-) -> ApiResponse {
+async fn run_scene(State(state): State<AppState>, Path(name): Path<String>) -> ApiResponse {
     let Some(scene) = state.scenes.get(&name).await else {
         return error(StatusCode::NOT_FOUND, &format!("no scene named '{name}'"));
     };
-    let targets = if body.is_empty() {
-        vec![]
-    } else {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RunBody {
-            #[serde(default)]
-            targets: Vec<String>,
-        }
-        match serde_json::from_slice::<RunBody>(&body) {
-            Ok(run_body) => run_body.targets,
-            Err(e) => return error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
-        }
-    };
-    state.runner.run(&name, scene, None, targets).await;
-    ok()
+    match state.runner.run(&name, scene, None).await {
+        Ok(()) => ok(),
+        Err(running) => error(
+            StatusCode::CONFLICT,
+            &format!("scene '{running}' is running; POST /stop to take over"),
+        ),
+    }
 }
 
 // MARK: schedules

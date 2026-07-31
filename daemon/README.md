@@ -21,11 +21,11 @@ through synchronously and patch the cache optimistically.
 |----------|-----------------|
 | `GET /lights` | `{"lights": [{id, name, on, hue, saturation, level, reachable}]}`; **502** while the bridge is unreachable |
 | `PUT /lights/<id>` | any subset of `{on, hue, saturation, level}`; **409** while a running scene owns the light |
-| `GET /scenes` | `{"scenes": {name: {duration, points}}}` |
-| `PUT /scenes/<name>` | `{duration, points: [{t, hue, saturation, level}]}` — upsert |
+| `GET /scenes` | `{"scenes": {name: {duration, lights: {id: [{t, hue, saturation, level}]}}}}` |
+| `PUT /scenes/<name>` | same shape — upsert |
 | `DELETE /scenes/<name>` | **409** while a schedule references it |
-| `POST /scenes/<name>/run` | optional `{"targets": [ids]}` — run now |
-| `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, targets, enabled}}}` |
+| `POST /scenes/<name>/run` | run now (the scene says which lights) |
+| `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, enabled}}}` |
 | `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist) |
 | `DELETE /schedules/<name>` | |
 | `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
@@ -34,19 +34,22 @@ through synchronously and patch the cache optimistically.
 `level` is device brightness independent of `on`; clients express "off" as
 `{"on": false}` (level 0 is never sent to /lights).
 
-**Scenes** are named curves: points on a 0...1 timeline, interpolated per
-channel and stepped over `duration` seconds. A solid color is the one-point,
-zero-duration case; a point with `level: 0` means off. `sunrise`/`sunset`
-are seeded presets in the same format (huectl's field-tested keyframes),
-stored in `~/.config/lumen/scenes.json` and editable like any user scene.
+**Scenes** carry everything about *what* happens: each light the scene
+touches maps to its own curve — points on a 0...1 timeline, interpolated per
+channel and stepped over `duration` seconds. A solid color is a one-point,
+zero-duration curve; `level: 0` means off; lights not in the map are left
+alone (several lights sharing a curve simply repeat it). `sunrise`/`sunset`
+are seeded on first contact with the bridge, instantiated per light with
+huectl's field-tested keyframes — stored in `~/.config/lumen/scenes.json`
+and editable like any user scene.
 
-**Schedules** fire a scene at `at` (`"HH:MM"`, box-local) on `days`
-(`["mon"..."sun"]`) or once on a date (`on: "YYYY-MM-DD"`, self-deleting),
-optionally restricted to `targets`. Stored in
-`~/.config/lumen/schedules.json`.
+**Schedules** are time-only: fire a scene at `at` (`"HH:MM"`, box-local) on
+`days` (`["mon"..."sun"]`) or once on a date (`on: "YYYY-MM-DD"`,
+self-deleting). Stored in `~/.config/lumen/schedules.json`.
 
-**Arbitration** is schedule-wins: while a timed scene runs it owns its
-targets — manual writes to them 409 until the scene finishes or `POST /stop`.
+**Arbitration** is schedule-wins, uniformly: while a timed scene runs it owns
+its targets — manual writes to them 409, new scene runs 409, and scheduled
+fires are skipped with a warning, until the scene finishes or `POST /stop`.
 An instant (0-duration) scene releases as soon as its write lands.
 
 ## Configuration
