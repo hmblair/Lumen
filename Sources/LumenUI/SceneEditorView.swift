@@ -132,9 +132,10 @@ struct SceneEditorView: View {
             CurveCanvas(groups: $draft.groups,
                         selectedGroup: $draft.selectedGroup,
                         selectedPoint: $draft.selectedPoint,
+                        duration: durationSeconds ?? 0,
                         playhead: previewT,
                         onScrub: { t in scrub(to: t) })
-                .frame(height: 180)
+                .frame(height: 192)
 
             HStack(alignment: .top, spacing: 12) {
                 pointInspector
@@ -503,6 +504,8 @@ private struct CurveCanvas: View {
     @Binding fileprivate var groups: [SceneEditorView.Draft.Group]
     @Binding var selectedGroup: Int
     @Binding var selectedPoint: Int?
+    /// Scene length in seconds, for the x-axis labels (0 = no labels).
+    var duration: Double
     /// External playhead (the preview run's scan); manual scrubbing wins.
     var playhead: Double?
     /// Scrub position while dragging; nil when the drag ends.
@@ -514,15 +517,21 @@ private struct CurveCanvas: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Inset the plot area by a dot radius: point circles then stay
-            // fully inside the canvas even at the corners, so their whole
-            // area is visible and clickable.
-            let rect = CGRect(origin: .zero, size: geo.size)
-                .insetBy(dx: dotSize / 2 + 2, dy: dotSize / 2 + 2)
+            // Inset the plot area by a dot radius (so point circles stay
+            // fully inside and clickable even at the corners), plus room at
+            // the bottom for the x-axis tick labels.
+            let inset = dotSize / 2 + 2
+            let labelSpace: CGFloat = duration > 0 ? 13 : 0
+            let rect = CGRect(x: inset, y: inset,
+                              width: geo.size.width - 2 * inset,
+                              height: geo.size.height - 2 * inset - labelSpace)
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.primary.opacity(0.05))
                 grid(rect)
+                if duration > 0 {
+                    xAxisLabels(rect)
+                }
                 ForEach(groups.indices, id: \.self) { g in
                     if !groups[g].points.isEmpty {
                         let isSelected = g == selectedGroup
@@ -575,6 +584,37 @@ private struct CurveCanvas: View {
     private func value(at location: CGPoint, in rect: CGRect) -> (t: Double, level: Double) {
         (t: min(max((location.x - rect.minX) / rect.width, 0), 1),
          level: min(max(1 - (location.y - rect.minY) / rect.height, 0), 1))
+    }
+
+    /// Ticks at the quarters of the timeline, labeled in real time units
+    /// (they follow the duration field live).
+    private func xAxisLabels(_ rect: CGRect) -> some View {
+        ForEach([0.0, 0.25, 0.5, 0.75, 1.0], id: \.self) { fraction in
+            let x = rect.minX + fraction * rect.width
+            Path { path in
+                path.move(to: CGPoint(x: x, y: rect.maxY))
+                path.addLine(to: CGPoint(x: x, y: rect.maxY + 3))
+            }
+            .stroke(Color.primary.opacity(0.25), lineWidth: 1)
+            Text(timeLabel(fraction * duration))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .position(x: min(max(x, rect.minX + 8), rect.maxX - 8),
+                          y: rect.maxY + 10)
+        }
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        if seconds <= 0 { return "0" }
+        if seconds < 60 { return "\(Int(seconds.rounded()))s" }
+        if seconds < 3_600 {
+            let minutes = seconds / 60
+            return minutes == minutes.rounded()
+                ? "\(Int(minutes))m" : String(format: "%.1fm", minutes)
+        }
+        let hours = seconds / 3_600
+        return hours == hours.rounded()
+            ? "\(Int(hours))h" : String(format: "%.1fh", hours)
     }
 
     private func grid(_ rect: CGRect) -> some View {
