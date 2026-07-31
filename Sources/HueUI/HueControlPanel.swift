@@ -57,26 +57,34 @@ public struct HueControlPanel: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
-        lightPicker
-        Divider()
+        // Everything that acts on lights is disabled and dimmed while the bridge
+        // is unreachable — those actions would silently fail. The banner, header
+        // (refresh/settings) and Quit stay usable.
+        Group {
+            lightPicker
+            Divider()
 
-        if client.selectionIsMixed, let rep = client.representative {
-            Label("Mixed colors — showing \(rep.name). Drag to unify.",
-                  systemImage: "circle.lefthalf.filled")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if client.selectionIsMixed, let rep = client.representative {
+                Label("Mixed colors — showing \(rep.name). Drag to unify.",
+                      systemImage: "circle.lefthalf.filled")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ColorWheel(hue: $hue, saturation: $saturation) {
+                client.applyColor(hue: hue, saturation: saturation)
+            }
+            .frame(width: 210, height: 210)
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+            .opacity(hasSelection ? 1 : 0.35)
+            .disabled(!hasSelection)
+            .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
+
+            brightnessSlider
         }
+        .disabled(!client.isReachable)
+        .opacity(client.isReachable ? 1 : 0.4)
 
-        ColorWheel(hue: $hue, saturation: $saturation) {
-            client.applyColor(hue: hue, saturation: saturation)
-        }
-        .frame(width: 210, height: 210)
-        .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
-        .opacity(hasSelection ? 1 : 0.35)
-        .disabled(!hasSelection)
-        .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
-
-        brightnessSlider
         if onQuit != nil { footer }
     }
 

@@ -97,6 +97,7 @@ public final class HueClient: ObservableObject {
     // cancel each other.
     private var colorTask: Task<Void, Never>?
     private var briTask: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
 
     private var targets: [String] { Array(selection) }
 
@@ -128,6 +129,27 @@ public final class HueClient: ObservableObject {
         return selectedLights.contains {
             abs($0.brightnessFraction - first.brightnessFraction) > tolerance
         }
+    }
+
+    // MARK: - Polling
+
+    /// Repeatedly refresh so light state and reachability stay current without
+    /// user action. Each cycle refreshes then sleeps, so a slow (timing-out)
+    /// request naturally spaces attempts out. The loop pauses while the machine
+    /// sleeps and resumes on wake, since Task.sleep can't fire while frozen.
+    public func startPolling(every interval: Duration = .seconds(1)) {
+        stopPolling()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(for: interval)
+            }
+        }
+    }
+
+    public func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     // MARK: - Reads

@@ -36,15 +36,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panel: MenuPanel!
     private var iconObserver: AnyCancellable?
     private var outsideClickMonitor: Any?
+    private var pollActivity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-only app: no Dock icon, no main window.
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = statusImage
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePanel)
+        updateStatusButton()
 
         panel = MenuPanel(rootView:
             HueControlPanel(client: client, onQuit: { NSApp.terminate(nil) })
@@ -57,9 +58,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // (not RunLoop.main) so updates aren't starved by event tracking.
         iconObserver = client.objectWillChange
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.statusItem.button?.image = self?.statusImage }
+            .sink { [weak self] in self?.updateStatusButton() }
 
-        Task { await client.refresh() }
+        // Poll every second while awake so state and reachability stay current.
+        // Opt out of App Nap so the cadence is honored while the app is idle;
+        // the "AllowingIdleSystemSleep" variant still lets the Mac sleep when
+        // the user steps away, at which point polling naturally stops.
+        pollActivity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "Poll Hue bridge state")
+        client.startPolling(every: .seconds(1))
     }
 
     @objc private func togglePanel() {
@@ -101,17 +109,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         closePanel()
     }
 
+    /// Update the status item's icon and dim it when the bridge is unreachable,
+    /// so disconnection reads at a glance even with the panel closed.
+    private func updateStatusButton() {
+        guard let button = statusItem.button else { return }
+        button.image = statusImage
+        button.alphaValue = client.isReachable ? 1 : 0.4
+    }
+
     /// The menu bar icon. Palette rendering keeps the bulb neutral (Primary =
     /// label color) and tints the accent rays with the representative light's
     /// color. The rays fade in with brightness via alpha — transparent when off
     /// (brightnessFraction 0), fully opaque at 100% — so no separate off state
-    /// is needed. A colored NSImage must set `isTemplate = false`, otherwise the
-    /// menu bar flattens it.
+    /// is needed. When the bridge is unreachable the icon drops to a plain
+    /// monochrome template (the dimming is applied on the button) rather than
+    /// showing a stale color. A colored NSImage must set `isTemplate = false`,
+    /// otherwise the menu bar flattens it.
     private var statusImage: NSImage {
         let base = NSImage(systemSymbolName: "warninglight.fill",
                            accessibilityDescription: "Hue lights")
             ?? NSImage(systemSymbolName: "lightbulb.fill",
                        accessibilityDescription: "Hue lights")!
+
+        guard client.isReachable else {
+            base.isTemplate = true
+            return base
+        }
 
         let light = client.representative
         let accent = NSColor(hue: light?.hueFraction ?? 0,
