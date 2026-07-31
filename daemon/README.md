@@ -28,6 +28,10 @@ through synchronously and patch the cache optimistically.
 | `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, enabled}}}` |
 | `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist) |
 | `DELETE /schedules/<name>` | |
+| `GET /groups` | `{"groups": {id: {name, lights}}}` — bridge-native groups |
+| `POST /groups` | `{name, lights}` → `{"ok": true, "id": id}` |
+| `PUT /groups/<id>` | any subset of `{on, hue, saturation, level, name, lights}`; state applies to all members atomically (**409** if a scene owns any) |
+| `DELETE /groups/<id>` | member lights are unaffected |
 | `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
 | `POST /stop` | `{"stopped": name \| null}` — release manual control |
 | `GET /config` | `{"bridgeIP": override \| null, "activeIP", "bridgeReachable"}` |

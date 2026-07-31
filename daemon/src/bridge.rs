@@ -44,6 +44,17 @@ pub struct Light {
     pub reachable: bool,
 }
 
+/// A light group in the normalized schema. Groups live on the bridge (like
+/// names), so the vendor ecosystem sees the same membership; Lumen creates
+/// them as type LightGroup, which allows arbitrary overlapping membership
+/// (unlike the vendor app's one-Room-per-light).
+#[derive(Serialize, Clone, Debug)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub lights: Vec<String>,
+}
+
 /// A normalized partial state update (any subset of the four keys).
 /// `transition` (seconds) asks the light to fade to the target rather than
 /// jump; it's used by effects internally and not exposed over the HTTP API.
@@ -151,6 +162,113 @@ impl Bridge {
             .await
             .map_err(|e| BridgeError(format!("rename of light {light_id} failed: {e}")))?;
         Ok(())
+    }
+
+    // MARK: groups
+
+    /// All groups in normalized form.
+    pub async fn fetch_groups(&self) -> Result<Vec<Group>, BridgeError> {
+        let raw: Value = self
+            .request(reqwest::Method::GET, "/groups", None)
+            .await
+            .map_err(|e| BridgeError(format!("bridge unreachable: {e}")))?
+            .json()
+            .await
+            .map_err(|e| BridgeError(format!("bridge unreachable: {e}")))?;
+        let Value::Object(map) = raw else {
+            return Err(BridgeError("unexpected /groups response".into()));
+        };
+        Ok(map
+            .iter()
+            .filter_map(|(id, value)| {
+                let name = value.get("name")?.as_str()?.to_string();
+                let lights = value
+                    .get("lights")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|l| l.as_str().map(str::to_string))
+                    .collect();
+                Some(Group { id: id.clone(), name, lights })
+            })
+            .collect())
+    }
+
+    /// Apply a normalized partial state to every member of a group with one
+    /// bridge command — atomic, so the lights change in lockstep.
+    pub async fn apply_state_to_group(&self, group_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
+        let path = format!("/groups/{group_id}/action");
+        self.request(reqwest::Method::PUT, &path, Some(denormalize(state)))
+            .await
+            .map_err(|e| BridgeError(format!("write to group {group_id} failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Create a group; returns the bridge-assigned id. The v1 API reports
+    /// failures inside a 200 body, so the response is checked, not just the
+    /// status.
+    pub async fn create_group(&self, name: &str, lights: &[String]) -> Result<String, BridgeError> {
+        let body = json!({ "name": name, "lights": lights, "type": "LightGroup" });
+        let response: Value = self
+            .request(reqwest::Method::POST, "/groups", Some(body))
+            .await
+            .map_err(|e| BridgeError(format!("group creation failed: {e}")))?
+            .json()
+            .await
+            .map_err(|e| BridgeError(format!("group creation failed: {e}")))?;
+        if let Some(message) = hue_error(&response) {
+            return Err(BridgeError(format!("group creation failed: {message}")));
+        }
+        response
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("success"))
+            .and_then(|success| success.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| BridgeError("group creation: unexpected response".into()))
+    }
+
+    /// Update a group's name and/or membership.
+    pub async fn update_group(
+        &self,
+        group_id: &str,
+        name: Option<&str>,
+        lights: Option<&[String]>,
+    ) -> Result<(), BridgeError> {
+        let mut body = Map::new();
+        if let Some(name) = name {
+            body.insert("name".into(), json!(name));
+        }
+        if let Some(lights) = lights {
+            body.insert("lights".into(), json!(lights));
+        }
+        let path = format!("/groups/{group_id}");
+        let response: Value = self
+            .request(reqwest::Method::PUT, &path, Some(Value::Object(body)))
+            .await
+            .map_err(|e| BridgeError(format!("group update failed: {e}")))?
+            .json()
+            .await
+            .map_err(|e| BridgeError(format!("group update failed: {e}")))?;
+        match hue_error(&response) {
+            Some(message) => Err(BridgeError(format!("group update failed: {message}"))),
+            None => Ok(()),
+        }
+    }
+
+    pub async fn delete_group(&self, group_id: &str) -> Result<(), BridgeError> {
+        let path = format!("/groups/{group_id}");
+        let response: Value = self
+            .request(reqwest::Method::DELETE, &path, None)
+            .await
+            .map_err(|e| BridgeError(format!("group deletion failed: {e}")))?
+            .json()
+            .await
+            .map_err(|e| BridgeError(format!("group deletion failed: {e}")))?;
+        match hue_error(&response) {
+            Some(message) => Err(BridgeError(format!("group deletion failed: {message}"))),
+            None => Ok(()),
+        }
     }
 
     /// Issue a bridge request; on a connection error, rediscover and retry once.
@@ -273,6 +391,18 @@ fn discover_blocking() -> Option<String> {
     }
     let _ = mdns.shutdown();
     found
+}
+
+/// The Hue v1 API reports failures as `[{"error": {"description": ...}}]`
+/// inside a 200 response; extract the description if present.
+fn hue_error(response: &Value) -> Option<String> {
+    response.as_array()?.iter().find_map(|item| {
+        item.get("error")?
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or(Some("unknown bridge error".to_string()))
+    })
 }
 
 // MARK: normalization
