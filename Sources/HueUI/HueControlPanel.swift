@@ -224,7 +224,7 @@ public struct HueControlPanel: View {
                 Button { brightness = 0 } label: {
                     Image(systemName: "sun.min")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Off")
 
                 Slider(value: $brightness, in: 0...1)
@@ -236,7 +236,7 @@ public struct HueControlPanel: View {
                 Button { brightness = 1 } label: {
                     Image(systemName: "sun.max.fill")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(HoverIconButtonStyle())
                 .help("Full brightness")
             }
         }
@@ -256,6 +256,34 @@ public struct HueControlPanel: View {
             client.selection.remove(id)
         } else {
             client.selection.insert(id)
+        }
+    }
+}
+
+/// An icon button that reacts to hover — brightening and showing a subtle
+/// background — so tappable icons (the brightness sun icons) read as clickable.
+private struct HoverIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HoverIcon(configuration: configuration)
+    }
+
+    private struct HoverIcon: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(hovering ? Color.primary : Color.secondary)
+                .padding(3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.12 : 0))
+                )
+                .scaleEffect(configuration.isPressed ? 0.9 : 1)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+                .onHover { hovering = $0 }
+                .contentShape(Rectangle())
         }
     }
 }
