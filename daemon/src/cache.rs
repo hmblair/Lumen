@@ -8,20 +8,28 @@
 //!
 //! Author: Hamish M. Blair <hmblair@stanford.edu>
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::bridge::{Bridge, BridgeError, Light, StateUpdate};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const FRESH_FOR: Duration = Duration::from_secs(5);
+/// After an API write to a light, bridge polls don't overwrite it for this
+/// long — the bridge can serve a snapshot from just before the write, and
+/// letting that clobber the cache would briefly revert accepted writes for
+/// every client. Makes /lights monotone w.r.t. acknowledged writes.
+const WRITE_GUARD: Duration = Duration::from_secs(2);
 
 pub struct LightCache {
     bridge: Arc<Bridge>,
     inner: RwLock<Option<(Vec<Light>, Instant)>>,
+    /// Per-light time of the last accepted API write.
+    written: Mutex<HashMap<String, Instant>>,
 }
 
 impl LightCache {
@@ -29,6 +37,7 @@ impl LightCache {
         LightCache {
             bridge,
             inner: RwLock::new(None),
+            written: Mutex::new(HashMap::new()),
         }
     }
 
@@ -45,23 +54,26 @@ impl LightCache {
     /// Write through to the bridge, then patch the cached light.
     pub async fn apply(&self, light_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
         self.bridge.apply_state(light_id, state).await?;
-        let mut guard = self.inner.write().await;
-        if let Some((lights, _)) = guard.as_mut() {
-            if let Some(light) = lights.iter_mut().find(|l| l.id == light_id) {
-                if let Some(on) = state.on {
-                    light.on = on;
-                }
-                if let Some(hue) = state.hue {
-                    light.hue = hue;
-                }
-                if let Some(saturation) = state.saturation {
-                    light.saturation = saturation;
-                }
-                if let Some(level) = state.level {
-                    light.level = level;
+        {
+            let mut guard = self.inner.write().await;
+            if let Some((lights, _)) = guard.as_mut() {
+                if let Some(light) = lights.iter_mut().find(|l| l.id == light_id) {
+                    if let Some(on) = state.on {
+                        light.on = on;
+                    }
+                    if let Some(hue) = state.hue {
+                        light.hue = hue;
+                    }
+                    if let Some(saturation) = state.saturation {
+                        light.saturation = saturation;
+                    }
+                    if let Some(level) = state.level {
+                        light.level = level;
+                    }
                 }
             }
         }
+        self.written.lock().await.insert(light_id.to_string(), Instant::now());
         Ok(())
     }
 
@@ -96,7 +108,27 @@ impl LightCache {
                             info!("Bridge reachable; {} light(s)", lights.len());
                             was_reachable = Some(true);
                         }
-                        *cache.inner.write().await = Some((lights, Instant::now()));
+                        // Recently written lights keep their cached (written)
+                        // state; the bridge's view may predate the write.
+                        let mut written = cache.written.lock().await;
+                        written.retain(|_, at| at.elapsed() < WRITE_GUARD);
+                        let mut guard = cache.inner.write().await;
+                        let merged: Vec<Light> = lights
+                            .into_iter()
+                            .map(|fresh| {
+                                if written.contains_key(&fresh.id) {
+                                    if let Some((cached, _)) = guard.as_ref() {
+                                        if let Some(local) =
+                                            cached.iter().find(|l| l.id == fresh.id)
+                                        {
+                                            return local.clone();
+                                        }
+                                    }
+                                }
+                                fresh
+                            })
+                            .collect();
+                        *guard = Some((merged, Instant::now()));
                     }
                     Err(e) => {
                         if was_reachable != Some(false) {

@@ -351,13 +351,8 @@ public struct ControlPanel: View {
             Text("Lumen").font(.headline)
             Spacer()
             if controller.isConfigured {
-                Button {
-                    Task { await controller.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh")
+                // No refresh button: polls adopt state continuously, so the
+                // panel is never stale by more than a poll interval.
 
                 // Each section icon becomes an x while its section is open;
                 // the scenes x also closes the editor (it's a sub-screen).

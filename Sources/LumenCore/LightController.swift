@@ -57,9 +57,10 @@ public final class LightController: ObservableObject {
     /// (e.g. a write colliding with a poll) doesn't make the hint flicker.
     @Published public private(set) var isReachable = true
 
-    /// Bumps whenever the controller adopts fresh state — first load or a
-    /// reconnection. The panel reseeds on change. Steady-state polls don't bump
-    /// it, so optimistic edits are never overridden while connected.
+    /// Bumps whenever adopted light state actually changed — first load,
+    /// reconnection, or another client/scene changing the lights. The panel
+    /// reseeds on change. Lights this client wrote recently are exempt from
+    /// adoption (see refresh()), so it never fires against an edit in flight.
     @Published public private(set) var syncToken = 0
 
     /// The scene run in progress per the daemon (nil when idle). Drives the
@@ -90,6 +91,7 @@ public final class LightController: ObservableObject {
             selection = []
             hasSynced = false
             failedPolls = 0
+            lastLocalWrite = [:]
         }
     }
 
@@ -108,6 +110,15 @@ public final class LightController: ObservableObject {
     private let disconnectThreshold = 3
     private var failedPolls = 0
     private var hasSynced = false
+
+    /// Per-light time of this client's last write. Polls adopt daemon state
+    /// continuously — that's what keeps several devices in sync — except for
+    /// lights written locally within `writeGuardWindow`, whose in-flight
+    /// values must not be clobbered by a poll snapshotted before the write
+    /// landed. A continuous drag keeps refreshing the timestamp, so the
+    /// guard also covers active gestures.
+    var lastLocalWrite: [String: Date] = [:]
+    private let writeGuardWindow: TimeInterval = 1.5
 
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
     /// source or a stub without touching this type.
@@ -210,22 +221,35 @@ public final class LightController: ObservableObject {
                 throw URLError(.badServerResponse)
             }
             let parsed = try JSONDecoder().decode(LightsResponse.self, from: data).lights
-            let wasRunning = running != nil
             await refreshStatus()
-            // Adopt state on first load and reconnection as before, and also
-            // while (and just after) a scene runs: manual controls are greyed
-            // out then, so adoption can't clobber an edit, and it keeps the
-            // panel tracking the scene's progress and final state.
-            let reconnected = !isReachable
             failedPolls = 0
             isReachable = true
             lastError = nil
-            if reconnected || !hasSynced || running != nil || wasRunning {
+            // Continuous adoption: every poll takes the daemon's state, so a
+            // change made anywhere (another device, a scene, curl) shows up
+            // here within a poll — except lights this client wrote within the
+            // guard window, which keep their local (newer) values.
+            let now = Date()
+            let merged: [Light] = parsed
+                .map { (fresh: Light) -> Light in
+                    if let written = lastLocalWrite[fresh.id],
+                       now.timeIntervalSince(written) < writeGuardWindow,
+                       let local = lights.first(where: { $0.id == fresh.id }) {
+                        return local
+                    }
+                    return fresh
+                }
+                .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+            lastLocalWrite = lastLocalWrite.filter { now.timeIntervalSince($0.value) < writeGuardWindow }
+            let changed = merged != lights
+            lights = merged
+            // Default the selection to all lights only on the first sync with
+            // a source — a deliberately emptied selection stays empty.
+            if !hasSynced {
                 hasSynced = true
-                lights = parsed.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
-                if selection.isEmpty { selection = Set(lights.map(\.id)) }
-                syncToken += 1
+                selection = Set(lights.map(\.id))
             }
+            if changed { syncToken += 1 }
         } catch {
             failedPolls += 1
             if failedPolls >= disconnectThreshold {
@@ -305,10 +329,19 @@ public final class LightController: ObservableObject {
     }
 
     /// Mutate the local model for the given lights so the UI reflects a change
-    /// before (and independently of) the network round-trip.
+    /// before (and independently of) the network round-trip. Also stamps the
+    /// write guard so polls don't clobber the change while it propagates.
     private func updateLocal(_ ids: [String], _ transform: (inout Light) -> Void) {
+        markWritten(ids)
         for i in lights.indices where ids.contains(lights[i].id) {
             transform(&lights[i])
+        }
+    }
+
+    func markWritten(_ ids: [String]) {
+        let now = Date()
+        for id in ids {
+            lastLocalWrite[id] = now
         }
     }
 

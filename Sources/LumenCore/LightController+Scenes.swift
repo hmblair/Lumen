@@ -153,6 +153,7 @@ extension LightController {
     /// Fire-and-forget write to specific lights, used by the scene editor's
     /// timeline scrubbing (level 0 = off, matching the app invariant).
     public func setLights(_ ids: [String], hue: Double, saturation: Double, level: Double) {
+        markWritten(ids)
         let body: [String: Any] = level <= 0
             ? ["on": false]
             : ["on": true, "hue": hue, "saturation": saturation, "level": level]
@@ -168,6 +169,7 @@ extension LightController {
     /// power and the stored color of lights that were off. Used to undo the
     /// editor's temporary scrub/preview writes.
     public func restoreLights(_ snapshot: [Light]) {
+        markWritten(snapshot.map(\.id))
         Task {
             for light in snapshot {
                 let body: [String: Any] = ["on": light.on,
