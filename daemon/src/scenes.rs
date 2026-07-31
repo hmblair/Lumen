@@ -1,8 +1,8 @@
 //! Scenes: named per-light color/brightness programs.
 //!
 //! A scene maps each light it touches to a curve: points on a normalized
-//! 0...1 timeline, linearly interpolated per channel and stepped over
-//! `duration` seconds. A solid color is a one-point, zero-duration curve; a
+//! 0...1 timeline, monotone-cubic interpolated per channel (smooth, no
+//! overshoot past keyframes) and stepped over `duration` seconds. A solid color is a one-point, zero-duration curve; a
 //! point with level 0 turns the light off (the app's invariant: a light is
 //! off exactly when its brightness is 0). Lights not in the map are left
 //! alone. A schedule is time-only — everything about *what* happens,
@@ -75,6 +75,9 @@ impl Scene {
                 }
             }
             points.sort_by(|a, b| a.t.partial_cmp(&b.t).expect("finite by validation"));
+            if points.windows(2).any(|w| w[1].t - w[0].t < 1e-9) {
+                return Err(format!("light {light_id}: points share the same t"));
+            }
         }
         Ok(())
     }
@@ -123,27 +126,69 @@ impl Scene {
 }
 
 /// The interpolated frame at timeline position `t` (clamped to the ends).
+/// Each channel follows a monotone cubic spline through the points — smooth,
+/// but never overshooting past a keyframe (a sunrise can't dip darker than
+/// its darkest point). The Swift editor draws the same math (SceneCurve).
 fn sample(points: &[Point], t: f64) -> Point {
-    let first = points.first().expect("validated non-empty");
-    let last = points.last().expect("validated non-empty");
-    if t <= first.t {
-        return *first;
-    }
-    if t >= last.t {
-        return *last;
-    }
-    let after = points.iter().position(|p| p.t >= t).expect("t < last.t");
-    let (a, b) = (&points[after - 1], &points[after]);
-    let span = b.t - a.t;
-    // Coincident points: the later one wins, matching sort stability.
-    let f = if span <= 0.0 { 1.0 } else { (t - a.t) / span };
-    let lerp = |x: f64, y: f64| x + f * (y - x);
+    let xs: Vec<f64> = points.iter().map(|p| p.t).collect();
+    let channel = |select: fn(&Point) -> f64| {
+        let ys: Vec<f64> = points.iter().map(select).collect();
+        interp_channel(&xs, &ys, t).clamp(0.0, 1.0)
+    };
     Point {
         t,
-        hue: lerp(a.hue, b.hue),
-        saturation: lerp(a.saturation, b.saturation),
-        level: lerp(a.level, b.level),
+        hue: channel(|p| p.hue),
+        saturation: channel(|p| p.saturation),
+        level: channel(|p| p.level),
     }
+}
+
+/// Monotone cubic interpolation (Fritsch–Carlson), one channel. With two
+/// points it reduces to linear. `xs` is strictly increasing (validated).
+fn interp_channel(xs: &[f64], ys: &[f64], t: f64) -> f64 {
+    let n = xs.len();
+    if n == 1 || t <= xs[0] {
+        return ys[0];
+    }
+    if t >= xs[n - 1] {
+        return ys[n - 1];
+    }
+
+    // Secant slopes per interval, then tangents per point.
+    let d: Vec<f64> = (0..n - 1).map(|i| (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i])).collect();
+    let mut m = vec![0.0; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..n - 1 {
+        // A tangent of 0 at local extrema keeps the curve monotone per side.
+        m[i] = if d[i - 1] * d[i] <= 0.0 { 0.0 } else { (d[i - 1] + d[i]) / 2.0 };
+    }
+    // Fritsch–Carlson limiter: clamp tangents so no interval overshoots.
+    for i in 0..n - 1 {
+        if d[i] == 0.0 {
+            m[i] = 0.0;
+            m[i + 1] = 0.0;
+            continue;
+        }
+        let a = m[i] / d[i];
+        let b = m[i + 1] / d[i];
+        let s = a * a + b * b;
+        if s > 9.0 {
+            let tau = 3.0 / s.sqrt();
+            m[i] = tau * a * d[i];
+            m[i + 1] = tau * b * d[i];
+        }
+    }
+
+    // Cubic Hermite on the containing interval.
+    let i = xs.windows(2).position(|w| t < w[1]).unwrap_or(n - 2);
+    let h = xs[i + 1] - xs[i];
+    let s = (t - xs[i]) / h;
+    let h00 = (1.0 + 2.0 * s) * (1.0 - s) * (1.0 - s);
+    let h10 = s * (1.0 - s) * (1.0 - s);
+    let h01 = s * s * (3.0 - 2.0 * s);
+    let h11 = s * s * (s - 1.0);
+    h00 * ys[i] + h10 * h * m[i] + h01 * ys[i + 1] + h11 * h * m[i + 1]
 }
 
 /// A frame as a light write: level 0 is "off", anything else is on at that
@@ -272,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn sample_interpolates_and_clamps() {
+    fn sample_is_linear_with_two_points_and_clamps() {
         let scene = one_light(vec![
             Point { t: 0.0, hue: 0.0, saturation: 1.0, level: 0.0 },
             Point { t: 0.5, hue: 0.2, saturation: 1.0, level: 1.0 },
@@ -281,6 +326,33 @@ mod tests {
         assert!((mid.hue - 0.1).abs() < 1e-12);
         assert!((mid.level - 0.5).abs() < 1e-12);
         assert_eq!(sample(&scene.lights["1"], 0.9).level, 1.0); // clamped to last point
+    }
+
+    #[test]
+    fn spline_hits_keyframes_and_never_overshoots() {
+        let p = |t: f64, level: f64| Point { t, hue: 0.1, saturation: 0.5, level };
+        let scene = one_light(vec![p(0.0, 0.0), p(0.4, 1.0), p(0.6, 1.0), p(1.0, 0.2)]);
+        let points = &scene.lights["1"];
+        for kf in points.iter() {
+            assert!((sample(points, kf.t).level - kf.level).abs() < 1e-12);
+        }
+        // Monotone: the plateau between 0.4 and 0.6 stays flat at 1.0 (no
+        // bulge above the keyframes), and nothing exceeds the keyframe range.
+        assert!((sample(points, 0.5).level - 1.0).abs() < 1e-9);
+        for i in 0..=100 {
+            let level = sample(points, i as f64 / 100.0).level;
+            assert!((0.0..=1.0).contains(&level));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_times() {
+        let p = |t: f64| Point { t, hue: 0.1, saturation: 0.5, level: 0.5 };
+        let mut scene = Scene {
+            duration: 60.0,
+            lights: BTreeMap::from([("1".to_string(), vec![p(0.3), p(0.3)])]),
+        };
+        assert!(scene.validate().is_err());
     }
 
     #[test]

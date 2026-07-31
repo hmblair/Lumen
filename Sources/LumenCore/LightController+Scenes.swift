@@ -141,6 +141,36 @@ extension LightController {
         await refresh()
     }
 
+    /// Fire-and-forget write to specific lights, used by the scene editor's
+    /// timeline scrubbing (level 0 = off, matching the app invariant).
+    public func setLights(_ ids: [String], hue: Double, saturation: Double, level: Double) {
+        let body: [String: Any] = level <= 0
+            ? ["on": false]
+            : ["on": true, "hue": hue, "saturation": saturation, "level": level]
+        let data = try? JSONSerialization.data(withJSONObject: body)
+        Task {
+            for id in ids {
+                _ = await send("PUT", "lights/\(id)", body: data)
+            }
+        }
+    }
+
+    /// Put lights back to a previously captured state — full state including
+    /// power and the stored color of lights that were off. Used to undo the
+    /// editor's temporary scrub/preview writes.
+    public func restoreLights(_ snapshot: [Light]) {
+        Task {
+            for light in snapshot {
+                let body: [String: Any] = ["on": light.on,
+                                           "hue": light.hue,
+                                           "saturation": light.saturation,
+                                           "level": light.level]
+                let data = try? JSONSerialization.data(withJSONObject: body)
+                _ = await send("PUT", "lights/\(light.id)", body: data)
+            }
+        }
+    }
+
     // MARK: - Plumbing
 
     private func get(_ path: String) async -> Data? {

@@ -112,9 +112,12 @@ menu bar icon when the lights are unreachable, and reseeds only on reconnect.
   panel's settings (gear button). The raw bridge passthrough at
   `lights.hmblair.com` remains for debugging but the app no longer uses it.
 - Scenes (per-light color/brightness programs; sunrise/sunset presets) and
-  time-only schedules live on the daemon and are managed from the panel's
-  calendar screen; while a scene runs, manual control pauses (banner + Stop).
-  Next: an axis-style curve editor for authoring multi-point scenes in-app,
-  and spline interpolation to go with it.
+  time-only schedules live on the daemon, managed from the panel's palette
+  and calendar screens respectively; while a scene runs, manual control
+  pauses (banner + Stop). Scenes are authored in the axis-style curve editor
+  (x = time, y = brightness, points carry color; drag the timeline to try
+  the scene live, Preview runs it compressed to 15 s and restores the room
+  after). Curves render and run as monotone cubic splines — the editor draws
+  exactly what the daemon executes.
 - A `ControlWidget` could add a quick on/off toggle to Control Center; the color
   wheel has to stay in the menu bar.

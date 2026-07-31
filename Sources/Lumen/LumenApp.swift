@@ -49,12 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.action = #selector(togglePanel)
         updateStatusButton()
 
+        // No fixed width here: the panel sizes to the SwiftUI content, and
+        // ControlPanel widens itself while the scene editor is open.
         panel = MenuPanel(rootView:
             ControlPanel(
                 controller: controller,
                 onQuit: { NSApp.terminate(nil) },
                 loginItem: Self.loginItem)
-                .frame(width: 280)
         )
         panel.delegate = self
         panel.onDismissRequest = { [weak self] in self?.closePanel() }

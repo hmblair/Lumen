@@ -32,8 +32,30 @@ public struct ControlPanel: View {
     @State private var isSeeding = false
 
     @State private var urlText = ""
-    @State private var showingSettings = false
-    @State private var showingSchedules = false
+
+    /// Single source of truth for navigation — one current screen, so
+    /// contradictory combinations (an open editor under a closed section)
+    /// are unrepresentable. The scene editor belongs to the scenes section.
+    private enum Screen: Equatable {
+        case controls
+        case settings
+        case scenes
+        case schedules
+        case sceneEditor(SceneEditContext)
+
+        var inScenes: Bool {
+            if case .sceneEditor = self { return true }
+            return self == .scenes
+        }
+    }
+
+    private struct SceneEditContext: Identifiable, Equatable {
+        let id = UUID()
+        var name: String?
+        var scene: LumenCore.Scene?
+    }
+
+    @State private var screen: Screen = .controls
     @State private var urlStatus: URLStatus = .none
     @State private var checkTask: Task<Void, Never>?
 
@@ -54,28 +76,50 @@ public struct ControlPanel: View {
 
     private var hasSelection: Bool { !controller.selection.isEmpty }
 
+    private var isEditingScene: Bool {
+        if case .sceneEditor = screen { return true }
+        return false
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             Divider()
-            // Not configured yet (or the user opened settings) -> the editor;
-            // otherwise the schedules screen or the main controls.
-            if !controller.isConfigured || showingSettings {
+            if !controller.isConfigured || screen == .settings {
                 serverSetup
-            } else if showingSchedules {
-                runningBanner
-                SchedulesView(controller: controller,
-                              currentColor: { (hue, saturation, brightness) })
             } else {
-                controls
+                switch screen {
+                case .scenes:
+                    runningBanner
+                    ScenesView(controller: controller,
+                               currentColor: { (hue, saturation, brightness) },
+                               onEditScene: { name, scene in
+                                   screen = .sceneEditor(SceneEditContext(name: name, scene: scene))
+                               })
+                case .sceneEditor(let context):
+                    runningBanner
+                    SceneEditorView(controller: controller,
+                                    originalName: context.name,
+                                    original: context.scene,
+                                    currentColor: { (hue, saturation, brightness) },
+                                    onClose: { screen = .scenes })
+                        .id(context.id)   // fresh editor state per open
+                case .schedules:
+                    runningBanner
+                    SchedulesView(controller: controller)
+                case .controls, .settings:
+                    controls
+                }
             }
         }
         .padding(14)
+        // The axis canvas needs more room than the control column.
+        .frame(width: isEditingScene ? 420 : 280)
         .onAppear {
             urlText = controller.baseURL?.absoluteString ?? ""
             // Keep first-run setup on screen so it doesn't jump to controls the
             // moment a valid URL auto-applies; the user leaves via the gear.
-            if !controller.isConfigured { showingSettings = true }
+            if !controller.isConfigured { screen = .settings }
             seedFromLiveState()
         }
         .onChange(of: controller.selection) { _ in seedFromLiveState() }
@@ -269,21 +313,29 @@ public struct ControlPanel: View {
                 .buttonStyle(.borderless)
                 .help("Refresh")
 
+                // Each section icon becomes an x while its section is open;
+                // the scenes x also closes the editor (it's a sub-screen).
                 Button {
-                    showingSettings = false
-                    showingSchedules.toggle()
+                    screen = screen.inScenes ? .controls : .scenes
                 } label: {
-                    Image(systemName: showingSchedules ? "xmark" : "calendar.badge.clock")
+                    Image(systemName: screen.inScenes ? "xmark" : "paintpalette")
                 }
                 .buttonStyle(.borderless)
-                .help("Schedules & scenes")
+                .help("Scenes")
+
+                Button {
+                    screen = screen == .schedules ? .controls : .schedules
+                } label: {
+                    Image(systemName: screen == .schedules ? "xmark" : "calendar.badge.clock")
+                }
+                .buttonStyle(.borderless)
+                .help("Schedules")
 
                 Button {
                     urlText = controller.baseURL?.absoluteString ?? ""
-                    showingSchedules = false
-                    showingSettings.toggle()
+                    screen = screen == .settings ? .controls : .settings
                 } label: {
-                    Image(systemName: showingSettings ? "xmark" : "gearshape")
+                    Image(systemName: screen == .settings ? "xmark" : "gearshape")
                 }
                 .buttonStyle(.borderless)
                 .help("Settings")

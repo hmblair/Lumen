@@ -1,8 +1,7 @@
 // SchedulesView.swift
-// The schedules screen: list and edit schedules, browse scenes, run a scene
-// now, save the current color as a scene. Cross-platform, provider-neutral —
-// everything goes through LightController's normalized client. Compact: it
-// lives in the same 280 pt menu-bar panel as the main controls.
+// The schedules screen: the *when* — list and edit time-only schedules that
+// fire scenes. Cross-platform, provider-neutral; compact enough for the
+// 280 pt menu-bar panel. Scenes themselves are managed on ScenesView.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import SwiftUI
@@ -12,11 +11,8 @@ private let dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 struct SchedulesView: View {
     @ObservedObject var controller: LightController
-    /// The wheel/slider state, for "save current color as scene".
-    var currentColor: () -> (hue: Double, saturation: Double, level: Double)
 
     @State private var editing: EditState?
-    @State private var newSceneName = ""
     @State private var errorMessage: String?
 
     /// The schedule form's working state; name identifies the schedule being
@@ -50,8 +46,6 @@ struct SchedulesView: View {
                 editor
             } else {
                 scheduleList
-                Divider()
-                sceneList
             }
         }
         .task { await controller.loadLibrary() }
@@ -225,83 +219,4 @@ struct SchedulesView: View {
         editing = nil
     }
 
-    // MARK: - Scenes
-
-    private var sceneList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("SCENES").font(.caption).foregroundStyle(.secondary)
-            ForEach(controller.scenes.sorted(by: { $0.key < $1.key }), id: \.key) { name, scene in
-                HStack(spacing: 6) {
-                    Image(systemName: scene.isSolid ? "circle.fill" : "chart.xyaxis.line")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(name)
-                    Text(sceneSummary(scene))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        Task { errorMessage = await controller.runScene(named: name) }
-                    } label: {
-                        Image(systemName: "play.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    // One scene at a time: the running one must finish or be
-                    // stopped first (the daemon would 409 anyway).
-                    .disabled(controller.running != nil)
-                    .help("Run this scene")
-                    Button {
-                        Task { errorMessage = await controller.deleteScene(named: name) }
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Delete")
-                }
-            }
-            HStack(spacing: 6) {
-                TextField("Save current color as…", text: $newSceneName)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                Button {
-                    Task { await saveCurrentColor() }
-                } label: {
-                    Image(systemName: "square.and.arrow.down")
-                }
-                .buttonStyle(.borderless)
-                .disabled(newSceneName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .help("Save the wheel/slider color as a solid scene")
-            }
-        }
-    }
-
-    /// e.g. "2 lights · 60m" for a curve, "2 lights" for a solid.
-    /// (Qualified: LumenCore.Scene shadows SwiftUI.Scene in this module.)
-    private func sceneSummary(_ scene: LumenCore.Scene) -> String {
-        let count = scene.lights.count
-        let lights = count == 1 ? "1 light" : "\(count) lights"
-        guard scene.duration > 0 else { return lights }
-        let time = scene.duration < 90
-            ? "\(Int(scene.duration))s"
-            : "\(Int((scene.duration / 60).rounded()))m"
-        return "\(lights) · \(time)"
-    }
-
-    /// Capture the wheel/slider color for the currently selected lights (all
-    /// lights when nothing is selected) as a solid scene.
-    private func saveCurrentColor() async {
-        let name = newSceneName.trimmingCharacters(in: .whitespaces)
-        let ids = controller.selection.isEmpty
-            ? controller.lights.map(\.id)
-            : Array(controller.selection)
-        let color = currentColor()
-        let scene = Scene.solid(hue: color.hue, saturation: color.saturation,
-                                level: color.level, lightIDs: ids)
-        if let error = await controller.save(scene: scene, named: name) {
-            errorMessage = error
-        } else {
-            errorMessage = nil
-            newSceneName = ""
-        }
-    }
 }
