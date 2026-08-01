@@ -112,7 +112,12 @@ impl Scene {
             if cancel.is_cancelled() {
                 return;
             }
-            self.apply_frame(&cache, i as f64 / steps as f64, Some(interval)).await;
+            // The first frame enters quickly — fading into it over a full
+            // interval visibly interpolated from whatever the lights were
+            // doing (a 1h scene took 30s to reach its own starting state).
+            // Subsequent frames fade over the interval for smoothness.
+            let fade = if i == 0 { MIN_STEP_SECS } else { interval };
+            self.apply_frame(&cache, i as f64 / steps as f64, Some(fade)).await;
             if i == steps {
                 return;
             }
