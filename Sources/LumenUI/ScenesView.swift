@@ -70,42 +70,63 @@ struct ScenesView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button {
-                Task { errorMessage = await controller.runScene(named: name) }
-            } label: {
-                Image(systemName: "play.fill")
+            // Tight spacing, like the header tabs: the hover style pads each
+            // icon by 3pt for its hover background.
+            HStack(spacing: 2) {
+                Button {
+                    Task { errorMessage = await controller.runScene(named: name) }
+                } label: {
+                    Image(systemName: "play.fill")
+                }
+                .buttonStyle(HoverIconButtonStyle())
+                // One scene at a time: the running one must finish or be
+                // stopped first (the daemon would 409 anyway).
+                .disabled(controller.running != nil)
+                .help("Run this scene")
+                Button {
+                    onEditScene(name, scene)
+                } label: {
+                    Image(systemName: "slider.horizontal.below.sun.max")
+                }
+                .buttonStyle(HoverIconButtonStyle())
+                .help("Edit in the curve editor")
+                Button {
+                    Task { errorMessage = await controller.deleteScene(named: name) }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(HoverIconButtonStyle())
+                .help("Delete")
             }
-            .buttonStyle(HoverIconButtonStyle())
-            // One scene at a time: the running one must finish or be
-            // stopped first (the daemon would 409 anyway).
-            .disabled(controller.running != nil)
-            .help("Run this scene")
-            Button {
-                onEditScene(name, scene)
-            } label: {
-                Image(systemName: "pencil")
-            }
-            .buttonStyle(HoverIconButtonStyle())
-            .help("Edit in the curve editor")
-            Button {
-                Task { errorMessage = await controller.deleteScene(named: name) }
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(HoverIconButtonStyle())
-            .help("Delete")
         }
     }
 
-    /// e.g. "2 lights · 60m" for a curve, "2 lights" for a solid.
+    /// e.g. "Bedroom, Living room · 60m" — the rooms the scene touches
+    /// (with "+n" for involved lights outside any room), falling back to a
+    /// light count when no rooms are involved.
     private func sceneSummary(_ scene: LumenCore.Scene) -> String {
-        let count = scene.lights.count
-        let lights = count == 1 ? "1 light" : "\(count) lights"
-        guard scene.duration > 0 else { return lights }
+        let sceneLights = Set(scene.lights.keys)
+        let roomNames = controller.groups.values
+            .filter { !sceneLights.isDisjoint(with: $0.lights) }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let roomed = Set(controller.groups.values.flatMap(\.lights))
+        let strays = sceneLights.subtracting(roomed).count
+
+        var what: String
+        if roomNames.isEmpty {
+            what = sceneLights.count == 1 ? "1 light" : "\(sceneLights.count) lights"
+        } else {
+            what = roomNames.joined(separator: ", ")
+            if strays > 0 {
+                what += " +\(strays)"
+            }
+        }
+        guard scene.duration > 0 else { return what }
         let time = scene.duration < 90
             ? "\(Int(scene.duration))s"
             : "\(Int((scene.duration / 60).rounded()))m"
-        return "\(lights) · \(time)"
+        return "\(what) · \(time)"
     }
 
     /// Capture the wheel/slider color for the currently selected lights (all
