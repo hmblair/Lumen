@@ -28,6 +28,10 @@ struct SceneEditorView: View {
     /// Light state captured before temporary writes, restored afterwards.
     @State private var scrubSnapshot: [Light]?
     @State private var previewSnapshot: [Light]?
+    /// Scratch name for preview runs — dot-prefixed so it's hidden from
+    /// scene lists, unique so it can never collide with (or overwrite,
+    /// or delete) a user's scene.
+    private let scratchName = ".preview-\(UUID().uuidString.prefix(8))"
 
     fileprivate struct Draft {
         struct Group: Identifiable {
@@ -475,13 +479,13 @@ struct SceneEditorView: View {
     /// scene is removed when the editor closes.
     private func preview() async {
         errorMessage = nil
-        if let error = await controller.save(scene: builtScene(duration: 15), named: "Preview") {
+        if let error = await controller.save(scene: builtScene(duration: 15), named: scratchName) {
             errorMessage = error
             return
         }
         previewSnapshot = affectedLights()
         previewActive = true
-        if let error = await controller.runScene(named: "Preview") {
+        if let error = await controller.runScene(named: scratchName) {
             errorMessage = error
             previewSnapshot = nil
             return
@@ -507,10 +511,10 @@ struct SceneEditorView: View {
     private func restoreAfterPreview() async {
         guard let snapshot = previewSnapshot else { return }
         let deadline = Date().addingTimeInterval(5)
-        while controller.running?.scene == "Preview", Date() < deadline {
+        while controller.running?.scene == scratchName, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(200))
         }
-        if controller.running?.scene == "Preview" {
+        if controller.running?.scene == scratchName {
             await controller.stopScene()
         }
         controller.restoreLights(snapshot)
@@ -521,11 +525,11 @@ struct SceneEditorView: View {
         guard previewActive else { return }
         previewActive = false
         previewT = nil
-        if controller.running?.scene == "Preview" {
+        if controller.running?.scene == scratchName {
             await controller.stopScene()
         }
         await restoreAfterPreview()
-        await controller.deleteScene(named: "Preview")
+        await controller.deleteScene(named: scratchName)
     }
 
     /// The current state of every light the draft touches — the snapshot

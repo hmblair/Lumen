@@ -122,6 +122,11 @@ public final class LightController: ObservableObject {
     var lastLocalWrite: [String: Date] = [:]
     private let writeGuardWindow: TimeInterval = 1.5
 
+    /// FIFO chain for the editor's temporary writes (scrub + restore).
+    /// Unordered fire-and-forget Tasks let a throttled scrub write land
+    /// *after* the release-restore, leaving lights stuck mid-scrub.
+    var editorWriteChain: Task<Void, Never>?
+
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
     /// source or a stub without touching this type.
     public init(session: URLSession = .shared, defaults: UserDefaults = .standard) {

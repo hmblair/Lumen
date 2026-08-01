@@ -147,10 +147,11 @@ impl Bridge {
     /// Apply a normalized partial state to one light.
     pub async fn apply_state(&self, light_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
         let path = format!("/lights/{light_id}/state");
-        self.request(reqwest::Method::PUT, &path, Some(denormalize(state)))
+        let response = self
+            .request(reqwest::Method::PUT, &path, Some(denormalize(state)))
             .await
             .map_err(|e| BridgeError(format!("write to light {light_id} failed: {e}")))?;
-        Ok(())
+        confirm_write(response, &format!("write to light {light_id} failed")).await
     }
 
     /// Rename a light. Names live on the light resource (not /state) and are
@@ -158,10 +159,11 @@ impl Bridge {
     /// own app — sees the same name.
     pub async fn rename_light(&self, light_id: &str, name: &str) -> Result<(), BridgeError> {
         let path = format!("/lights/{light_id}");
-        self.request(reqwest::Method::PUT, &path, Some(json!({ "name": name })))
+        let response = self
+            .request(reqwest::Method::PUT, &path, Some(json!({ "name": name })))
             .await
             .map_err(|e| BridgeError(format!("rename of light {light_id} failed: {e}")))?;
-        Ok(())
+        confirm_write(response, &format!("rename of light {light_id} failed")).await
     }
 
     // MARK: groups
@@ -197,10 +199,11 @@ impl Bridge {
     /// bridge command — atomic, so the lights change in lockstep.
     pub async fn apply_state_to_group(&self, group_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
         let path = format!("/groups/{group_id}/action");
-        self.request(reqwest::Method::PUT, &path, Some(denormalize(state)))
+        let response = self
+            .request(reqwest::Method::PUT, &path, Some(denormalize(state)))
             .await
             .map_err(|e| BridgeError(format!("write to group {group_id} failed: {e}")))?;
-        Ok(())
+        confirm_write(response, &format!("write to group {group_id} failed")).await
     }
 
     /// Create a group; returns the bridge-assigned id. The v1 API reports
@@ -391,6 +394,19 @@ fn discover_blocking() -> Option<String> {
     }
     let _ = mdns.shutdown();
     found
+}
+
+/// Confirm a state/rename write: the v1 API reports failures inside 200
+/// bodies, so a write isn't done until its body says so.
+async fn confirm_write(response: reqwest::Response, context: &str) -> Result<(), BridgeError> {
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| BridgeError(format!("{context}: {e}")))?;
+    match hue_error(&body) {
+        Some(message) => Err(BridgeError(format!("{context}: {message}"))),
+        None => Ok(()),
+    }
 }
 
 /// The Hue v1 API reports failures as `[{"error": {"description": ...}}]`

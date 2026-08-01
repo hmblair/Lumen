@@ -146,19 +146,44 @@ impl Scene {
 /// The interpolated frame at timeline position `t` (clamped to the ends).
 /// Each channel follows a monotone cubic spline through the points — smooth,
 /// but never overshooting past a keyframe (a sunrise can't dip darker than
-/// its darkest point). The Swift editor draws the same math (SceneCurve).
+/// its darkest point). Hue is circular and takes the short way around the
+/// wheel (see `unwrap_hues`). The Swift editor draws the same math
+/// (SceneCurve).
 fn sample(points: &[Point], t: f64) -> Point {
     let xs: Vec<f64> = points.iter().map(|p| p.t).collect();
-    let channel = |select: fn(&Point) -> f64| {
-        let ys: Vec<f64> = points.iter().map(select).collect();
-        interp_channel(&xs, &ys, t).clamp(0.0, 1.0)
-    };
+    let channel = |ys: Vec<f64>| interp_channel(&xs, &ys, t);
     Point {
         t,
-        hue: channel(|p| p.hue),
-        saturation: channel(|p| p.saturation),
-        level: channel(|p| p.level),
+        hue: channel(unwrap_hues(points)).rem_euclid(1.0),
+        saturation: channel(points.iter().map(|p| p.saturation).collect()).clamp(0.0, 1.0),
+        level: channel(points.iter().map(|p| p.level).collect()).clamp(0.0, 1.0),
     }
+}
+
+/// Hue is a circle (0 and 1 are the same red), but the spline interpolates
+/// on a line — so unwrap the hue sequence first: shift each value by whole
+/// turns until it sits within half a turn of its predecessor. Interpolation
+/// then takes the short way around the wheel (0.95 -> 0.05 crosses red, not
+/// the long way through green), and samples wrap back into 0...1.
+fn unwrap_hues(points: &[Point]) -> Vec<f64> {
+    let mut hues: Vec<f64> = Vec::with_capacity(points.len());
+    for point in points {
+        let unwrapped = match hues.last() {
+            Some(prev) => {
+                let mut hue = point.hue;
+                while hue - prev > 0.5 {
+                    hue -= 1.0;
+                }
+                while prev - hue > 0.5 {
+                    hue += 1.0;
+                }
+                hue
+            }
+            None => point.hue,
+        };
+        hues.push(unwrapped);
+    }
+    hues
 }
 
 /// Monotone cubic interpolation (Fritsch–Carlson), one channel. With two
@@ -371,6 +396,25 @@ mod tests {
             lights: BTreeMap::from([("1".to_string(), vec![p(0.3), p(0.3)])]),
         };
         assert!(scene.validate().is_err());
+    }
+
+    #[test]
+    fn hue_takes_the_short_way_around_the_wheel() {
+        let p = |t: f64, hue: f64| Point { t, hue, saturation: 1.0, level: 0.5 };
+        let scene = one_light(vec![p(0.0, 0.95), p(1.0, 0.05)]);
+        let points = &scene.lights["1"];
+        // Every sample stays near the red wrap point — never out through
+        // green (hue ~0.3-0.7) as un-wrapped interpolation would go.
+        for i in 0..=20 {
+            let hue = sample(points, i as f64 / 20.0).hue;
+            let wrap_distance = hue.min(1.0 - hue);
+            assert!(
+                wrap_distance <= 0.051,
+                "sample {i}: hue {hue} strayed from the wrap point"
+            );
+        }
+        let mid = sample(points, 0.5).hue;
+        assert!(mid.min(1.0 - mid) < 0.01, "midpoint {mid} should sit at red");
     }
 
     #[test]

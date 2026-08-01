@@ -10,16 +10,37 @@ public enum SceneCurve {
 
     /// The interpolated point at timeline position `t` (clamped to the ends).
     /// `points` must be sorted by `t` with no duplicates (as validated and
-    /// stored by the daemon).
+    /// stored by the daemon). Hue is circular and takes the short way around
+    /// the wheel (see `unwrapHues`).
     public static func sample(_ points: [ScenePoint], at t: Double) -> ScenePoint {
         let xs = points.map(\.t)
-        func channel(_ select: (ScenePoint) -> Double) -> Double {
-            min(1, max(0, interpolate(xs: xs, ys: points.map(select), t: t)))
+        func channel(_ ys: [Double]) -> Double {
+            min(1, max(0, interpolate(xs: xs, ys: ys, t: t)))
         }
+        let hue = interpolate(xs: xs, ys: unwrapHues(points), t: t)
         return ScenePoint(t: t,
-                          hue: channel(\.hue),
-                          saturation: channel(\.saturation),
-                          level: channel(\.level))
+                          hue: hue - floor(hue),   // wrap back into 0...1
+                          saturation: channel(points.map(\.saturation)),
+                          level: channel(points.map(\.level)))
+    }
+
+    /// Hue is a circle (0 and 1 are the same red), but the spline
+    /// interpolates on a line — so unwrap the hue sequence first: shift each
+    /// value by whole turns until it sits within half a turn of its
+    /// predecessor. Interpolation then takes the short way around the wheel,
+    /// and samples wrap back into 0...1. Mirrors the daemon's `unwrap_hues`.
+    static func unwrapHues(_ points: [ScenePoint]) -> [Double] {
+        var hues: [Double] = []
+        hues.reserveCapacity(points.count)
+        for point in points {
+            var hue = point.hue
+            if let previous = hues.last {
+                while hue - previous > 0.5 { hue -= 1 }
+                while previous - hue > 0.5 { hue += 1 }
+            }
+            hues.append(hue)
+        }
+        return hues
     }
 
     /// One channel of Fritsch–Carlson. With two points it reduces to linear.

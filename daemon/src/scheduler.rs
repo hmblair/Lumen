@@ -103,6 +103,16 @@ pub fn spawn_scheduler(
     tokio::spawn(async move {
         let mut fired: HashSet<String> = HashSet::new();
         let mut last_date = None;
+        // The fired set is in-memory, so a restart inside the minute a
+        // schedule already fired would re-fire it. Pre-mark anything due in
+        // the startup minute; the cost — skipping a fire scheduled for the
+        // exact minute of a (seconds-long) deploy restart — is negligible.
+        let startup = Local::now();
+        for (name, schedule) in schedules.map().await {
+            if schedule.enabled && schedule.is_due(&startup) {
+                fired.insert(format!("{name}@{}", startup.date_naive()));
+            }
+        }
         loop {
             let now = Local::now();
             if last_date != Some(now.date_naive()) {
@@ -111,6 +121,17 @@ pub fn spawn_scheduler(
             }
 
             for (name, schedule) in schedules.map().await {
+                // One-shots whose date passed unfired (e.g. the daemon was
+                // down that day) would otherwise linger forever.
+                if let Some(on) = &schedule.on {
+                    if let Ok(date) = NaiveDate::parse_from_str(on, "%Y-%m-%d") {
+                        if date < now.date_naive() {
+                            warn!("Schedule '{name}' expired unfired ({on}); removing");
+                            schedules.remove(&name).await;
+                            continue;
+                        }
+                    }
+                }
                 let key = format!("{name}@{}", now.date_naive());
                 if !schedule.enabled || fired.contains(&key) || !schedule.is_due(&now) {
                     continue;

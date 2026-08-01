@@ -104,6 +104,12 @@ extension LightController {
 
     // MARK: - Library (scenes + schedules)
 
+    /// Scenes for display: dot-prefixed names are internal scratch (the
+    /// editor's preview run) and stay out of lists and pickers.
+    public var visibleScenes: [String: Scene] {
+        scenes.filter { !$0.key.hasPrefix(".") }
+    }
+
     /// Fetch scenes, schedules, and groups. Called when the panel opens and
     /// after mutations; not part of the 1 s poll.
     public func loadLibrary() async {
@@ -230,6 +236,16 @@ extension LightController {
         await refresh()
     }
 
+    /// Append an editor write to the FIFO chain, preserving order across
+    /// scrub writes and the final restore.
+    private func enqueueEditorWrite(_ op: @escaping @MainActor () async -> Void) {
+        let previous = editorWriteChain
+        editorWriteChain = Task {
+            await previous?.value
+            await op()
+        }
+    }
+
     /// Fire-and-forget write to specific lights, used by the scene editor's
     /// timeline scrubbing (level 0 = off, matching the app invariant).
     public func setLights(_ ids: [String], hue: Double, saturation: Double, level: Double) {
@@ -238,7 +254,7 @@ extension LightController {
             ? ["on": false]
             : ["on": true, "hue": hue, "saturation": saturation, "level": level]
         let data = try? JSONSerialization.data(withJSONObject: body)
-        Task {
+        enqueueEditorWrite { [self] in
             for id in ids {
                 _ = await send("PUT", "lights/\(id)", body: data)
             }
@@ -263,7 +279,7 @@ extension LightController {
     /// editor's temporary scrub/preview writes.
     public func restoreLights(_ snapshot: [Light]) {
         markWritten(snapshot.map(\.id))
-        Task {
+        enqueueEditorWrite { [self] in
             for light in snapshot {
                 let body: [String: Any] = ["on": light.on,
                                            "hue": light.hue,
