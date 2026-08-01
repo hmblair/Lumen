@@ -198,7 +198,7 @@ struct RoomListView: View {
                     onCommit(name)
                 }
             }
-            .onExitCommand {
+            .onEscape {
                 onDismiss()
                 rooms.clearError()
             }
@@ -223,7 +223,7 @@ struct RoomListView: View {
                     }
                 }
             }
-            .onExitCommand {
+            .onEscape {
                 addingRoom = false
                 rooms.clearError()
             }
@@ -259,7 +259,7 @@ struct RoomListView: View {
                         guard !name.isEmpty else { return }
                         Task { await controller.renameLight(id: light.id, to: name) }
                     }
-                    .onExitCommand { renamingLightID = nil }
+                    .onEscape { renamingLightID = nil }
             } else {
                 Text(light.name)
                     .onTapGesture(count: 2) {
