@@ -300,53 +300,84 @@ struct SceneEditorView: View {
 
     // MARK: - Light assignment
 
-    /// Membership in the selected group is exclusive: checking a light moves
-    /// it here from any other group; unchecking leaves it out of the scene.
+    /// Membership in the selected curve is exclusive: checking a light (or a
+    /// room) moves it here from any other curve; unchecking leaves it out of
+    /// the scene. Mirrors the main panel: rooms as headers with ticks,
+    /// lights indented beneath, unroomed lights at the end.
     private var lightAssignment: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("LIGHTS ON THIS CURVE").font(.caption2).foregroundStyle(.secondary)
-            ForEach(controller.lights) { light in
-                Button {
-                    toggleLight(light.id)
-                } label: {
-                    HStack(spacing: 5) {
-                        let inGroup = draft.groups.indices.contains(draft.selectedGroup)
-                            && draft.groups[draft.selectedGroup].lights.contains(light.id)
-                        Image(systemName: inGroup ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(inGroup ? Color.accentColor : Color.secondary)
-                        Text(light.name).font(.caption)
-                        if let other = groupIndex(of: light.id), other != draft.selectedGroup {
-                            Text("curve \(other + 1)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            if !controller.groups.isEmpty {
-                // One click puts a whole group on the selected curve —
-                // "this curve drives room x", and another group on another
-                // curve covers scenes spanning several rooms.
-                HStack(spacing: 4) {
-                    ForEach(controller.groups.sorted(by: { $0.value.name < $1.value.name }),
-                            id: \.key) { _, group in
-                        Button(group.name) {
-                            for lightID in group.lights {
-                                assignLight(lightID)
-                            }
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption2)
-                        .help("Put this group's lights on the selected curve")
-                    }
+            ForEach(sortedRooms, id: \.key) { _, room in
+                roomAssignHeader(room)
+                ForEach(controller.lights.filter { room.lights.contains($0.id) }) { light in
+                    lightAssignRow(light).padding(.leading, 14)
                 }
             }
-            Text("Unchecked lights are left alone.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            ForEach(unroomedLights) { light in
+                lightAssignRow(light)
+            }
         }
+    }
+
+    private var sortedRooms: [(key: String, value: LightGroup)] {
+        controller.groups.sorted {
+            $0.value.name.localizedCaseInsensitiveCompare($1.value.name) == .orderedAscending
+        }
+    }
+
+    private var unroomedLights: [Light] {
+        let roomed = Set(controller.groups.values.flatMap(\.lights))
+        return controller.lights.filter { !roomed.contains($0.id) }
+    }
+
+    /// Tick rule matches the main panel: on iff all the room's lights are on
+    /// the selected curve. Ticking assigns them all; unticking removes them
+    /// from the scene.
+    private func roomAssignHeader(_ room: LightGroup) -> some View {
+        let selectedLights = draft.groups.indices.contains(draft.selectedGroup)
+            ? draft.groups[draft.selectedGroup].lights : []
+        let onCurve = !room.lights.isEmpty && room.lights.allSatisfy(selectedLights.contains)
+        return Button {
+            if onCurve {
+                for id in room.lights {
+                    draft.groups[draft.selectedGroup].lights.remove(id)
+                }
+            } else {
+                for id in room.lights {
+                    assignLight(id)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: onCurve ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(onCurve ? Color.accentColor : Color.secondary)
+                Text(room.name).font(.caption).fontWeight(.medium)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Put this room's lights on the selected curve")
+    }
+
+    private func lightAssignRow(_ light: Light) -> some View {
+        Button {
+            toggleLight(light.id)
+        } label: {
+            HStack(spacing: 5) {
+                let inGroup = draft.groups.indices.contains(draft.selectedGroup)
+                    && draft.groups[draft.selectedGroup].lights.contains(light.id)
+                Image(systemName: inGroup ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(inGroup ? Color.accentColor : Color.secondary)
+                Text(light.name).font(.caption)
+                if let other = groupIndex(of: light.id), other != draft.selectedGroup {
+                    Text("curve \(other + 1)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Move a light onto the selected curve (idempotent, unlike toggling).
