@@ -211,8 +211,13 @@ public struct ControlPanel: View {
                     controller.applyColor(hue: hue, saturation: 0)
                 } label: {
                     Image(systemName: "drop.halffull")
+                        // 1.25x the standard 13pt icon size.
+                        .font(.system(size: 16.25))
                 }
                 .buttonStyle(HoverIconButtonStyle())
+                // Pull in from the frame's corner toward the circle's edge —
+                // the corner of the square sits well outside the wheel.
+                .offset(x: -8, y: -8)
                 .help("Reset to white")
             }
             .disabled(!hasSelection)
