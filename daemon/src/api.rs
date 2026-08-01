@@ -19,6 +19,8 @@
 //!   PUT    /scenes/{name}      <- same shape — upsert, validated here
 //!   DELETE /scenes/{name}      409 while a schedule references it
 //!   POST   /scenes/{name}/run  run now (the scene says which lights)
+//!   POST   /scenes/{name}/rename  <- {"to": name} — also repoints every
+//!                                 schedule that references the scene
 //!
 //! Schedules (time-only: fire a scene at a time on chosen days):
 //!   GET    /schedules          -> {"schedules": {name: {at, days, on?,
@@ -88,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/scenes/{name}", put(put_scene))
         .route("/scenes/{name}", delete(delete_scene))
         .route("/scenes/{name}/run", post(run_scene))
+        .route("/scenes/{name}/rename", post(rename_scene))
         .route("/schedules", get(get_schedules))
         .route("/schedules/{name}", put(put_schedule))
         .route("/schedules/{name}", delete(delete_schedule))
@@ -248,6 +251,43 @@ async fn run_scene(State(state): State<AppState>, Path(name): Path<String>) -> A
             &format!("scene '{running}' is running; POST /stop to take over"),
         ),
     }
+}
+
+/// Rename a scene, repointing every schedule that references it — the two
+/// stores stay consistent, so a rename can't strand or duplicate anything.
+async fn rename_scene(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    body: Bytes,
+) -> ApiResponse {
+    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(&body) else {
+        return error(StatusCode::BAD_REQUEST, "expected a JSON object");
+    };
+    if fields.keys().any(|k| k != "to") {
+        return error(StatusCode::BAD_REQUEST, "the only expected key is 'to'");
+    }
+    let Some(to) = fields.get("to").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    else {
+        return error(StatusCode::BAD_REQUEST, "'to' must be a non-empty string");
+    };
+    if to == name {
+        return ok();
+    }
+    let Some(scene) = state.scenes.get(&name).await else {
+        return error(StatusCode::NOT_FOUND, &format!("no scene named '{name}'"));
+    };
+    if state.scenes.get(to).await.is_some() {
+        return error(StatusCode::CONFLICT, &format!("a scene named '{to}' already exists"));
+    }
+    state.scenes.upsert(to.to_string(), scene).await;
+    for (key, mut schedule) in state.schedules.map().await {
+        if schedule.scene == name {
+            schedule.scene = to.to_string();
+            state.schedules.upsert(key, schedule).await;
+        }
+    }
+    state.scenes.remove(&name).await;
+    ok()
 }
 
 // MARK: schedules

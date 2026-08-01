@@ -452,12 +452,19 @@ struct SceneEditorView: View {
         guard let duration = durationSeconds else { return }
         await cleanupPreview()
         let name = draft.name.trimmingCharacters(in: .whitespaces)
+        // Rename first (the daemon repoints referencing schedules), then
+        // save the content under the final name. The old save-new +
+        // delete-old approach silently duplicated the scene whenever a
+        // schedule referenced it (the delete 409'd unnoticed).
+        if let originalName, originalName != name {
+            if let error = await controller.renameScene(from: originalName, to: name) {
+                errorMessage = error
+                return
+            }
+        }
         if let error = await controller.save(scene: builtScene(duration: duration), named: name) {
             errorMessage = error
             return
-        }
-        if let originalName, originalName != name {
-            await controller.deleteScene(named: originalName)
         }
         onClose()
     }

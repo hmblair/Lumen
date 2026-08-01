@@ -203,6 +203,16 @@ extension LightController {
         return error
     }
 
+    /// Rename a scene; the daemon repoints every schedule that references
+    /// it, so nothing is stranded or duplicated.
+    @discardableResult
+    public func renameScene(from name: String, to newName: String) async -> String? {
+        let body = try? JSONSerialization.data(withJSONObject: ["to": newName])
+        let error = await send("POST", "scenes/\(name)/rename", body: body)
+        await loadLibrary()
+        return error
+    }
+
     // MARK: - Runs
 
     /// Run a scene now (it applies to the lights it defines). Returns the
