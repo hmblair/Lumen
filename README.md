@@ -121,3 +121,7 @@ menu bar icon when the lights are unreachable, and reseeds only on reconnect.
   exactly what the daemon executes.
 - A `ControlWidget` could add a quick on/off toggle to Control Center; the color
   wheel has to stay in the menu bar.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
