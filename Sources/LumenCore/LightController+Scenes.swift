@@ -67,8 +67,9 @@ public struct Schedule: Codable, Hashable {
     }
 }
 
-/// A light group. Groups live on the bridge (like names), so the vendor
-/// ecosystem sees the same membership. Named LightGroup to avoid colliding
+/// A light group (room). Rooms are daemon-authoritative — they may be empty
+/// and survive independently of the bridge, which only carries best-effort
+/// mirrors for the vendor ecosystem. Named LightGroup to avoid colliding
 /// with SwiftUI.Group.
 public struct LightGroup: Codable, Hashable {
     public var name: String
@@ -140,13 +141,6 @@ extension LightController {
         if let target {
             groups[target]?.lights.append(id)
         }
-    }
-
-    /// Instantly drop a group from the local model (the optimistic half of
-    /// "the room's last light left"); the caller's network writes and reload
-    /// settle server truth.
-    public func locallyRemoveGroup(id: String) {
-        groups.removeValue(forKey: id)
     }
 
     /// Create a bridge group from the given lights; returns the daemon's

@@ -184,7 +184,8 @@ public struct ControlPanel: View {
             // Room UI insertion point (option B: sectioned list). Option A
             // (chips + flat list) lives at commit 2963c67 if it's ever
             // wanted back.
-            RoomListView(controller: controller, dismissToken: dismissEditsToken)
+            RoomListView(controller: controller, rooms: controller.rooms,
+                         dismissToken: dismissEditsToken)
             Divider()
 
             if controller.selectionIsMixed, let rep = controller.representative {

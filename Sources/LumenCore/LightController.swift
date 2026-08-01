@@ -78,6 +78,11 @@ public final class LightController: ObservableObject {
     /// screen (set internally by the scenes extension).
     @Published public internal(set) var bridgeConfig: BridgeConfig?
 
+    /// The rooms domain model (partition over the daemon's groups, pending
+    /// rooms, move orchestration). Long-lived here so pending rooms survive
+    /// view navigation.
+    public private(set) lazy var rooms = RoomsModel(controller: self)
+
     /// Daemon base URL (e.g. https://lumen.hmblair.com), persisted to
     /// `UserDefaults`. `nil` until the user configures it — there is no
     /// built-in default. The key is new as of the daemon migration, so users

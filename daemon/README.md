@@ -28,10 +28,17 @@ through synchronously and patch the cache optimistically.
 | `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, enabled}}}` |
 | `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist) |
 | `DELETE /schedules/<name>` | |
-| `GET /groups` | `{"groups": {id: {name, lights}}}` — bridge-native groups |
-| `POST /groups` | `{name, lights}` → `{"ok": true, "id": id}` |
-| `PUT /groups/<id>` | any subset of `{on, hue, saturation, level, name, lights}`; state applies to all members atomically (**409** if a scene owns any) |
+| `GET /groups` | `{"groups": {id: {name, lights}}}` — daemon-authoritative rooms (may be empty; served even with the bridge down) |
+| `POST /groups` | `{name, lights}` (lights may be `[]`) → `{"ok": true, "id": id}` |
+| `PUT /groups/<id>` | any subset of `{on, hue, saturation, level, name, lights}`; state applies to all members — atomically via the bridge mirror when one exists (**409** if a scene owns any) |
 | `DELETE /groups/<id>` | member lights are unaffected |
+
+**Rooms** live in `~/.config/lumen/rooms.json` with daemon-generated ids —
+the daemon, not the bridge, is their source of truth. Each room with lights
+is mirrored to a bridge group purely so the vendor's own app stays coherent
+(the bridge refuses empty groups, so an emptied room just loses its mirror
+until a light returns); mirroring is best-effort and never fails a room
+operation. On first run, existing bridge groups are imported once.
 | `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
 | `POST /stop` | `{"stopped": name \| null}` — release manual control |
 | `GET /config` | `{"bridgeIP": override \| null, "activeIP", "bridgeReachable"}` |

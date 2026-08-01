@@ -33,14 +33,16 @@
 //!                              started, ends}}
 //!   POST /stop             -> {"stopped": name | null}
 //!
-//! Groups (bridge-native, so the vendor ecosystem sees the same membership;
-//! created as overlapping-capable LightGroups):
+//! Groups/rooms (the DAEMON is the source of truth — rooms live in
+//! rooms.json, may be empty, and work with the bridge down; each room with
+//! lights is mirrored to a bridge group purely for the vendor ecosystem):
 //!   GET    /groups          -> {"groups": {id: {name, lights}}}
-//!   POST   /groups          <- {name, lights} -> {"ok": true, "id": id}
+//!   POST   /groups          <- {name, lights (may be [])} -> {"ok", "id"}
 //!   PUT    /groups/{id}     <- any subset of {on, hue, saturation, level,
-//!                             name, lights} — state applies atomically to
-//!                             every member (409 if a scene owns any);
-//!                             name/lights update the group itself
+//!                             name, lights} — state applies to every member
+//!                             (atomically via the mirror when one exists;
+//!                             409 if a scene owns any); name/lights update
+//!                             the room itself
 //!   DELETE /groups/{id}     (member lights are unaffected)
 //!
 //! Config:
@@ -64,6 +66,7 @@ use serde_json::{json, Value};
 
 use crate::bridge::{Bridge, StateUpdate};
 use crate::cache::LightCache;
+use crate::rooms::Rooms;
 use crate::runner::SceneRunner;
 use crate::scenes::Scene;
 use crate::scheduler::Schedule;
@@ -80,6 +83,7 @@ pub struct AppState {
     pub runner: Arc<SceneRunner>,
     pub scenes: Arc<Store<Scene>>,
     pub schedules: Arc<Store<Schedule>>,
+    pub rooms: Arc<Rooms>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -336,22 +340,21 @@ async fn stop(State(state): State<AppState>) -> ApiResponse {
     (StatusCode::OK, Json(json!({ "stopped": state.runner.stop().await })))
 }
 
-// MARK: groups
+// MARK: groups (rooms — daemon-authoritative, bridge-mirrored)
 
 async fn get_groups(State(state): State<AppState>) -> ApiResponse {
-    match state.cache.groups().await {
-        Some(groups) => {
-            let map: serde_json::Map<String, Value> = groups
-                .into_iter()
-                .map(|g| (g.id, json!({ "name": g.name, "lights": g.lights })))
-                .collect();
-            (StatusCode::OK, Json(json!({ "groups": map })))
-        }
-        None => error(StatusCode::BAD_GATEWAY, "bridge unreachable"),
-    }
+    let map: serde_json::Map<String, Value> = state
+        .rooms
+        .map()
+        .await
+        .into_iter()
+        .map(|(id, room)| (id, json!({ "name": room.name, "lights": room.lights })))
+        .collect();
+    (StatusCode::OK, Json(json!({ "groups": map })))
 }
 
-/// Validate a group name (bridge limit: 32 chars) from a JSON value.
+/// Validate a room name (kept to the bridge's 32-char limit so the mirror
+/// never needs truncating).
 fn parse_group_name(value: &Value) -> Result<String, ApiResponse> {
     match value.as_str().map(str::trim) {
         Some(name) if !name.is_empty() && name.chars().count() <= 32 => Ok(name.to_string()),
@@ -362,8 +365,8 @@ fn parse_group_name(value: &Value) -> Result<String, ApiResponse> {
     }
 }
 
-/// Validate a member list: string ids that all exist (when light state is
-/// known).
+/// Validate a member list — may be empty (empty rooms are fine); ids must
+/// exist when light state is known.
 async fn parse_group_lights(state: &AppState, value: &Value) -> Result<Vec<String>, ApiResponse> {
     let Some(ids) = value.as_array().map(|a| {
         a.iter()
@@ -372,9 +375,6 @@ async fn parse_group_lights(state: &AppState, value: &Value) -> Result<Vec<Strin
     }) else {
         return Err(error(StatusCode::BAD_REQUEST, "lights must be an array of light ids"));
     };
-    if ids.is_empty() {
-        return Err(error(StatusCode::BAD_REQUEST, "a group needs at least one light"));
-    }
     if let Some(lights) = state.cache.snapshot().await {
         for id in &ids {
             if !lights.iter().any(|l| &l.id == id) {
@@ -383,6 +383,20 @@ async fn parse_group_lights(state: &AppState, value: &Value) -> Result<Vec<Strin
         }
     }
     Ok(ids)
+}
+
+/// Room names are unique: case-insensitive, optionally ignoring the room
+/// being renamed.
+async fn group_name_taken(state: &AppState, name: &str, ignore: Option<&str>) -> Option<ApiResponse> {
+    let clash = state.rooms.map().await.iter().any(|(id, room)| {
+        Some(id.as_str()) != ignore && room.name.eq_ignore_ascii_case(name)
+    });
+    clash.then(|| {
+        error(
+            StatusCode::CONFLICT,
+            &format!("a group named '{name}' already exists"),
+        )
+    })
 }
 
 async fn post_group(State(state): State<AppState>, body: Bytes) -> ApiResponse {
@@ -406,25 +420,8 @@ async fn post_group(State(state): State<AppState>, body: Bytes) -> ApiResponse {
     if let Some(response) = group_name_taken(&state, &name, None).await {
         return response;
     }
-    match state.cache.create_group(&name, &lights).await {
-        Ok(id) => (StatusCode::OK, Json(json!({ "ok": true, "id": id }))),
-        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
-    }
-}
-
-/// Group names are unique (the bridge itself doesn't enforce this):
-/// case-insensitive, optionally ignoring one group (the one being renamed).
-async fn group_name_taken(state: &AppState, name: &str, ignore: Option<&str>) -> Option<ApiResponse> {
-    let groups = state.cache.groups().await?;
-    let clash = groups.iter().any(|g| {
-        Some(g.id.as_str()) != ignore && g.name.eq_ignore_ascii_case(name)
-    });
-    clash.then(|| {
-        error(
-            StatusCode::CONFLICT,
-            &format!("a group named '{name}' already exists"),
-        )
-    })
+    let id = state.rooms.create(&name, lights).await;
+    (StatusCode::OK, Json(json!({ "ok": true, "id": id })))
 }
 
 async fn put_group(
@@ -443,10 +440,7 @@ async fn put_group(
         return error(StatusCode::BAD_REQUEST, &format!("unknown keys: {unknown:?}"));
     }
 
-    let Some(groups) = state.cache.groups().await else {
-        return error(StatusCode::BAD_GATEWAY, "bridge unreachable");
-    };
-    let Some(group) = groups.iter().find(|g| g.id == group_id) else {
+    let Some(room) = state.rooms.get(&group_id).await else {
         return error(StatusCode::NOT_FOUND, &format!("no group with id {group_id}"));
     };
 
@@ -483,12 +477,12 @@ async fn put_group(
         }
     }
 
-    // State applies atomically to every member — arbitrated like light
-    // writes: refused whole if a running scene owns any member.
+    // State applies to every member — arbitrated like light writes: refused
+    // whole if a running scene owns any member.
     let has_state = update.on.is_some() || update.hue.is_some()
         || update.saturation.is_some() || update.level.is_some();
     if has_state {
-        for member in &group.lights {
+        for member in &room.lights {
             if let Some(scene) = state.runner.owner_of(member).await {
                 return error(
                     StatusCode::CONFLICT,
@@ -499,34 +493,39 @@ async fn put_group(
     }
 
     if new_name.is_some() || new_lights.is_some() {
-        if let Err(e) = state
-            .cache
-            .update_group(&group_id, new_name.as_deref(), new_lights.as_deref())
-            .await
-        {
-            return error(StatusCode::BAD_GATEWAY, &e.to_string());
-        }
+        state
+            .rooms
+            .update(&group_id, new_name.as_deref(), new_lights)
+            .await;
     }
     if has_state {
-        if let Err(e) = state.cache.apply_group(&group_id, &update).await {
-            return error(StatusCode::BAD_GATEWAY, &e.to_string());
+        // One atomic command through the mirror when it exists; per-light
+        // writes otherwise (or nothing, for an empty room).
+        if let (Some(bridge_id), false) = (&room.bridge_id, room.lights.is_empty()) {
+            if let Err(e) = state
+                .cache
+                .apply_bridge_group(bridge_id, &room.lights, &update)
+                .await
+            {
+                return error(StatusCode::BAD_GATEWAY, &e.to_string());
+            }
+        } else {
+            for member in &room.lights {
+                if let Err(e) = state.cache.apply(member, &update).await {
+                    return error(StatusCode::BAD_GATEWAY, &e.to_string());
+                }
+            }
         }
     }
     ok()
 }
 
 async fn delete_group(State(state): State<AppState>, Path(group_id): Path<String>) -> ApiResponse {
-    match state.cache.groups().await {
-        Some(groups) if !groups.iter().any(|g| g.id == group_id) => {
-            return error(StatusCode::NOT_FOUND, &format!("no group with id {group_id}"));
-        }
-        None => return error(StatusCode::BAD_GATEWAY, "bridge unreachable"),
-        _ => {}
+    if state.rooms.get(&group_id).await.is_none() {
+        return error(StatusCode::NOT_FOUND, &format!("no group with id {group_id}"));
     }
-    match state.cache.delete_group(&group_id).await {
-        Ok(()) => ok(),
-        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
-    }
+    state.rooms.delete(&group_id).await;
+    ok()
 }
 
 // MARK: config

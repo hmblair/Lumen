@@ -324,7 +324,9 @@ struct SceneEditorView: View {
     }
 
     private var sortedRooms: [(key: String, value: LightGroup)] {
-        controller.groups.sorted {
+        controller.groups
+            .filter { !$0.value.lights.isEmpty }   // empty rooms: nothing to assign
+            .sorted {
             $0.value.name.localizedCaseInsensitiveCompare($1.value.name) == .orderedAscending
         }
     }

@@ -9,6 +9,7 @@ mod api;
 mod bridge;
 mod cache;
 mod config;
+mod rooms;
 mod runner;
 mod scenes;
 mod scheduler;
@@ -37,7 +38,17 @@ async fn main() {
     let runner = Arc::new(runner::SceneRunner::new(Arc::clone(&cache)));
     scheduler::spawn_scheduler(Arc::clone(&schedules), Arc::clone(&scenes), Arc::clone(&runner));
 
-    let state = api::AppState { bridge, cache, runner, scenes, schedules };
+    // Rooms are daemon-authoritative (rooms.json); a fresh install imports
+    // the bridge's existing groups once, keeping them as mirrors.
+    let rooms_path = data_dir.join("rooms.json");
+    let rooms_missing = !rooms_path.exists();
+    let rooms = Arc::new(rooms::Rooms::new(
+        store::Store::load(rooms_path, Default::default()),
+        Arc::clone(&bridge),
+    ));
+    rooms::spawn_bridge_import(Arc::clone(&rooms), rooms_missing);
+
+    let state = api::AppState { bridge, cache, runner, scenes, schedules, rooms };
 
     let port = std::env::var("LUMEN_DAEMON_PORT")
         .ok()

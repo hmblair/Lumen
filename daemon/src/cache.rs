@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use crate::bridge::{Bridge, BridgeError, Group, Light, StateUpdate};
+use crate::bridge::{Bridge, BridgeError, Light, StateUpdate};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const FRESH_FOR: Duration = Duration::from_secs(5);
@@ -24,14 +24,9 @@ const FRESH_FOR: Duration = Duration::from_secs(5);
 /// letting that clobber the cache would briefly revert accepted writes for
 /// every client. Makes /lights monotone w.r.t. acknowledged writes.
 const WRITE_GUARD: Duration = Duration::from_secs(2);
-/// Groups change rarely (and our own CRUD refreshes eagerly), so they piggy-
-/// back on every Nth light poll.
-const GROUP_POLL_EVERY: u64 = 10;
-
 pub struct LightCache {
     bridge: Arc<Bridge>,
     inner: RwLock<Option<(Vec<Light>, Instant)>>,
-    groups: RwLock<Vec<Group>>,
     /// Per-light time of the last accepted API write.
     written: Mutex<HashMap<String, Instant>>,
 }
@@ -41,7 +36,6 @@ impl LightCache {
         LightCache {
             bridge,
             inner: RwLock::new(None),
-            groups: RwLock::new(Vec::new()),
             written: Mutex::new(HashMap::new()),
         }
     }
@@ -82,26 +76,17 @@ impl LightCache {
         Ok(())
     }
 
-    /// Current groups; None while the bridge is unreachable (same freshness
-    /// gate as the lights).
-    pub async fn groups(&self) -> Option<Vec<Group>> {
-        self.snapshot().await?;
-        Some(self.groups.read().await.clone())
-    }
-
-    /// Write one state atomically to every member of a group (a single
-    /// bridge command — the lights change in lockstep), patching the cache
-    /// and write guard for each member.
-    pub async fn apply_group(&self, group_id: &str, state: &StateUpdate) -> Result<(), BridgeError> {
-        let members: Vec<String> = self
-            .groups
-            .read()
-            .await
-            .iter()
-            .find(|g| g.id == group_id)
-            .map(|g| g.lights.clone())
-            .unwrap_or_default();
-        self.bridge.apply_state_to_group(group_id, state).await?;
+    /// Write one state atomically to every member of a mirrored room (a
+    /// single bridge group command — the lights change in lockstep),
+    /// patching the cache and write guard for each member. The caller (who
+    /// owns room truth) supplies both the bridge group id and the members.
+    pub async fn apply_bridge_group(
+        &self,
+        bridge_group_id: &str,
+        members: &[String],
+        state: &StateUpdate,
+    ) -> Result<(), BridgeError> {
+        self.bridge.apply_state_to_group(bridge_group_id, state).await?;
         {
             let mut guard = self.inner.write().await;
             if let Some((lights, _)) = guard.as_mut() {
@@ -124,52 +109,9 @@ impl LightCache {
         let now = Instant::now();
         let mut written = self.written.lock().await;
         for id in members {
-            written.insert(id, now);
+            written.insert(id.clone(), now);
         }
         Ok(())
-    }
-
-    /// Re-fetch groups from the bridge (used after CRUD, so clients see the
-    /// change immediately rather than at the next periodic refresh).
-    pub async fn refresh_groups(&self) -> Result<(), BridgeError> {
-        let groups = self.bridge.fetch_groups().await?;
-        *self.groups.write().await = groups;
-        Ok(())
-    }
-
-    pub async fn create_group(&self, name: &str, lights: &[String]) -> Result<String, BridgeError> {
-        let id = self.bridge.create_group(name, lights).await?;
-        self.refresh_groups().await?;
-        Ok(id)
-    }
-
-    pub async fn update_group(
-        &self,
-        group_id: &str,
-        name: Option<&str>,
-        lights: Option<&[String]>,
-    ) -> Result<(), BridgeError> {
-        self.bridge.update_group(group_id, name, lights).await?;
-        self.refresh_groups().await
-    }
-
-    pub async fn delete_group(&self, group_id: &str) -> Result<(), BridgeError> {
-        let result = self.bridge.delete_group(group_id).await;
-        self.refresh_groups().await?;
-        match result {
-            Ok(()) => Ok(()),
-            // The v1 API can answer "resource not available" even as the
-            // group disappears (seen deleting a vendor-app-created Room).
-            // Deletion is judged by the outcome: if the group is gone, it
-            // succeeded.
-            Err(e) => {
-                if self.groups.read().await.iter().any(|g| g.id == group_id) {
-                    Err(e)
-                } else {
-                    Ok(())
-                }
-            }
-        }
     }
 
     /// Rename a light on the bridge, patching the cache like a state write.
@@ -211,14 +153,7 @@ impl LightCache {
         let cache = Arc::clone(self);
         tokio::spawn(async move {
             let mut was_reachable: Option<bool> = None;
-            let mut cycle: u64 = 0;
             loop {
-                if cycle % GROUP_POLL_EVERY == 0 {
-                    if let Ok(groups) = cache.bridge.fetch_groups().await {
-                        *cache.groups.write().await = groups;
-                    }
-                }
-                cycle += 1;
                 match cache.bridge.fetch_lights().await {
                     Ok(lights) => {
                         if was_reachable != Some(true) {
