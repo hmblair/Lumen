@@ -168,6 +168,14 @@ public final class LightController: ObservableObject {
     /// list order (nil if nothing is selected).
     public var representative: Light? { selectedLights.first }
 
+    /// True when any selected light is off. An off bulb cannot store a color
+    /// (the bridge refuses hue/sat while off, and a poll would revert the
+    /// optimistic value), so the color controls disable instead of silently
+    /// reverting.
+    public var selectionHasOffLights: Bool {
+        selectedLights.contains { !$0.on }
+    }
+
     /// True when the selected lights don't all share the same color. Drives a
     /// "Mixed" hint, since the wheel can only show one position.
     public var selectionIsMixed: Bool {

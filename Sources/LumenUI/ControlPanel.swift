@@ -89,6 +89,13 @@ public struct ControlPanel: View {
 
     private var hasSelection: Bool { !controller.selection.isEmpty }
 
+    /// Color is editable only when something is selected and every selected
+    /// light is on — an off bulb can't store a color, so the wheel greys
+    /// out rather than accepting a change the bridge would revert.
+    private var colorEnabled: Bool {
+        hasSelection && !controller.selectionHasOffLights
+    }
+
     private var isEditingScene: Bool {
         if case .sceneEditor = screen { return true }
         return false
@@ -211,7 +218,7 @@ public struct ControlPanel: View {
             // Dim the wheel itself here; the drop button below dims via its
             // own style's disabled treatment (dimming after the overlay
             // stacked both, greying the button twice).
-            .opacity(hasSelection ? 1 : 0.35)
+            .opacity(colorEnabled ? 1 : 0.35)
             .overlay(alignment: .bottomTrailing) {
                 // White is the center of the HS wheel (saturation 0).
                 Button {
@@ -228,7 +235,7 @@ public struct ControlPanel: View {
                 .offset(x: -8, y: -8)
                 .help("Reset to white")
             }
-            .disabled(!hasSelection)
+            .disabled(!colorEnabled)
             .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
 
             brightnessSlider
