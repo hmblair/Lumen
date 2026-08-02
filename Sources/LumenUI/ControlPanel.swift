@@ -8,6 +8,11 @@
 
 import SwiftUI
 import LumenCore
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Injected "launch at login" control. The implementation is platform-specific
 /// (macOS uses SMAppService), so LumenUI stays free of ServiceManagement.
@@ -34,6 +39,9 @@ public struct ControlPanel: View {
     @State private var urlText = ""
     @State private var bridgeIPText = ""
     @State private var bridgeStatus: String?
+    /// Daemon settings are global — every client shares them — so they sit
+    /// behind a collapsed disclosure to keep casual fingers off.
+    @State private var showDaemonSettings = false
 
     /// Single source of truth for navigation — one current screen, so
     /// contradictory combinations (an open editor under a closed section)
@@ -232,6 +240,9 @@ public struct ControlPanel: View {
     // MARK: - Server configuration
 
     private var serverSetup: some View {
+        // Two groups: this app's own settings (server URL, launch at login),
+        // then the daemon's (bridge address) — settings that live on the box
+        // and are shared by every client.
         VStack(alignment: .leading, spacing: 8) {
             Text("SERVER URL").font(.caption).foregroundStyle(.secondary)
             TextField("https://lumen.example.com", text: $urlText)
@@ -240,9 +251,6 @@ public struct ControlPanel: View {
                 .overlay(alignment: .trailing) {
                     urlStatusIcon.padding(.trailing, 6)
                 }
-            if controller.isConfigured {
-                bridgeSetup
-            }
             if let loginItem {
                 Toggle("Launch at login", isOn: Binding(
                     get: loginItem.isEnabled,
@@ -251,15 +259,30 @@ public struct ControlPanel: View {
                     .controlSize(.small)
                     .font(.caption)
             }
-            if let onQuit {
-                Button { onQuit() } label: {
-                    Image(systemName: "power.circle")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(Color.red, Color.primary)
-                        .font(.title2)
+            if controller.isConfigured {
+                Divider()
+                Button {
+                    withAnimation { showDaemonSettings.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .rotationEffect(.degrees(showDaemonSettings ? 90 : 0))
+                        Text("DAEMON SETTINGS").font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(HoverIconButtonStyle())
-                .help("Quit")
+                .buttonStyle(.plain)
+                if showDaemonSettings {
+                    bridgeSetup
+                }
+            }
+            if let onQuit {
+                HStack {
+                    Spacer()
+                    Button("Quit") { onQuit() }
+                        .controlSize(.small)
+                }
             }
         }
         .onAppear(perform: checkURL)
@@ -372,7 +395,16 @@ public struct ControlPanel: View {
 
     private var header: some View {
         HStack {
-            Text("Lumen").font(.headline)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Lumen").font(.headline)
+                // The provider, greyed and 25% smaller than the title:
+                // vendor identity is the daemon's business, so the app only
+                // ever names it cosmetically.
+                Text("·").font(.headline).foregroundStyle(.secondary)
+                Text("Philips Hue")
+                    .font(.system(size: headlinePointSize * 0.75, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             if controller.isConfigured {
                 // No refresh button: polls adopt state continuously, so the
@@ -415,6 +447,16 @@ public struct ControlPanel: View {
                 }
                 .buttonStyle(HoverIconButtonStyle())
                 .help("Settings")
+    }
+
+    /// The platform's headline size (13 pt on macOS, 17 pt on iOS), so the
+    /// provider suffix scales from whatever "Lumen" actually renders at.
+    private var headlinePointSize: CGFloat {
+        #if os(macOS)
+        NSFont.preferredFont(forTextStyle: .headline).pointSize
+        #else
+        UIFont.preferredFont(forTextStyle: .headline).pointSize
+        #endif
     }
 
     private var brightnessSlider: some View {
