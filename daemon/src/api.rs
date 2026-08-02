@@ -95,6 +95,7 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(root))
         .route("/lights", get(get_lights))
         .route("/lights/{id}", put(put_light))
         .route("/scenes", get(get_scenes))
@@ -114,6 +115,12 @@ pub fn router(state: AppState) -> Router {
         .route("/config", get(get_config))
         .route("/config", put(put_config))
         .with_state(state)
+}
+
+/// A friendly root for health probes and curious browsers — every real
+/// path 404s less politely.
+async fn root() -> ApiResponse {
+    (StatusCode::OK, Json(json!({ "service": "lumen-daemon", "ok": true })))
 }
 
 // MARK: lights
