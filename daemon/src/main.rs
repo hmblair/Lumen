@@ -27,6 +27,20 @@ async fn main() {
     let config = config::load(); // exits with a clear message on missing config
     let data_dir = config::config_path().parent().expect("config has a dir").to_path_buf();
 
+    // The box's location (optional), for resolving sunrise/sunset schedules.
+    // Boot-time-fixed like the rest of config.env: changing it is an edit +
+    // restart, which is already the deploy motion on this box.
+    let location = match (config.latitude, config.longitude) {
+        (Some(lat), Some(lon)) => {
+            let coordinates = sunrise::Coordinates::new(lat, lon);
+            if coordinates.is_none() {
+                tracing::warn!("Ignoring out-of-range LATITUDE/LONGITUDE ({lat}, {lon})");
+            }
+            coordinates
+        }
+        _ => None,
+    };
+
     let bridge = Arc::new(bridge::Bridge::new(config));
     let cache = Arc::new(cache::LightCache::new(Arc::clone(&bridge)));
     cache.spawn_poll_loop();
@@ -36,7 +50,12 @@ async fn main() {
     // Presets need real light ids, so they seed once the bridge is first seen.
     scenes::spawn_preset_seeder(Arc::clone(&scenes), Arc::clone(&cache));
     let runner = Arc::new(runner::SceneRunner::new(Arc::clone(&cache)));
-    scheduler::spawn_scheduler(Arc::clone(&schedules), Arc::clone(&scenes), Arc::clone(&runner));
+    scheduler::spawn_scheduler(
+        Arc::clone(&schedules),
+        Arc::clone(&scenes),
+        Arc::clone(&runner),
+        location,
+    );
 
     // Rooms are daemon-authoritative (rooms.json); a fresh install imports
     // the bridge's existing groups once, keeping them as mirrors.
@@ -48,7 +67,7 @@ async fn main() {
     ));
     rooms::spawn_bridge_import(Arc::clone(&rooms), rooms_missing);
 
-    let state = api::AppState { bridge, cache, runner, scenes, schedules, rooms };
+    let state = api::AppState { bridge, cache, runner, scenes, schedules, rooms, location };
 
     let port = std::env::var("LUMEN_DAEMON_PORT")
         .ok()

@@ -17,6 +17,10 @@ const PLACEHOLDER_IPS: [&str; 2] = ["", "your-bridge-ip"];
 pub struct Config {
     pub api_key: String,
     pub bridge_ip: Option<String>,
+    /// Where the box is on Earth, for sunrise/sunset schedules. Optional;
+    /// solar schedules stay dormant without it.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -62,7 +66,11 @@ pub fn load() -> Config {
         .filter(|ip| !PLACEHOLDER_IPS.contains(&ip.as_str()))
         .cloned();
 
-    Config { api_key, bridge_ip }
+    let coordinate = |key: &str| values.get(key).and_then(|v| v.parse::<f64>().ok());
+    let latitude = coordinate("LATITUDE");
+    let longitude = coordinate("LONGITUDE");
+
+    Config { api_key, bridge_ip, latitude, longitude }
 }
 
 /// Persist a changed BRIDGE_IP (None = auto-discovery) back to config.env,

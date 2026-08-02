@@ -81,13 +81,16 @@ public struct LightGroup: Codable, Hashable {
     }
 }
 
-/// The daemon's bridge configuration (GET /config): the explicit address
-/// override (nil = mDNS auto-discovery), the address currently in use, and
-/// whether the bridge is answering.
+/// The daemon's GET /config payload: the bridge address — explicit override
+/// (nil = mDNS auto-discovery), the address currently in use, whether the
+/// bridge is answering — and today's sunrise/sunset ("HH:MM", box-local;
+/// nil when the daemon has no configured location).
 public struct BridgeConfig: Codable, Hashable {
     public let bridgeIP: String?
     public let activeIP: String?
     public let bridgeReachable: Bool
+    public let sunrise: String?
+    public let sunset: String?
 }
 
 /// The run reported by GET /status while a scene is active.

@@ -12,6 +12,28 @@ import AppKit
 
 private let dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+/// How a schedule names its time, mirroring the daemon's `at` grammar: a
+/// wall-clock "HH:MM", or the literals "sunrise"/"sunset".
+private enum TimeMode: String, CaseIterable {
+    case clock, sunrise, sunset
+
+    var symbol: String {
+        switch self {
+        case .clock: return "clock"
+        case .sunrise: return "sunrise.fill"
+        case .sunset: return "sunset.fill"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .clock: return "At a time"
+        case .sunrise: return "At sunrise"
+        case .sunset: return "At sunset"
+        }
+    }
+}
+
 /// Day sets with a nicer name than listing the days.
 private let daySetSummaries: [Set<String>: String] = [
     Set(dayOrder): "daily",
@@ -35,6 +57,7 @@ struct SchedulesView: View {
     /// 26 that clips its own text and ignores style/frame modifiers.
     private struct EditState {
         var key: String?   // nil = creating
+        var mode: TimeMode = .clock
         var hour = 7
         var minute = 0
         var days: Set<String> = Set(dayOrder.prefix(5))
@@ -56,7 +79,11 @@ struct SchedulesView: View {
                 scheduleList
             }
         }
-        .task { await controller.loadLibrary() }
+        .task {
+            await controller.loadLibrary()
+            // For today's sunrise/sunset, so solar rows can show the time.
+            await controller.loadBridgeConfig()
+        }
     }
 
     // MARK: - Schedule list
@@ -103,7 +130,7 @@ struct SchedulesView: View {
             // behave) disabled, wedging the schedule off forever.
             VStack(alignment: .leading, spacing: 1) {
                 Text(schedule.scene)
-                Text("\(localizedTime(schedule.at)) · \(daysSummary(schedule))")
+                Text("\(timeSummary(schedule.at)) · \(daysSummary(schedule))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -127,8 +154,23 @@ struct SchedulesView: View {
         }
     }
 
+    /// A row's time text: "7:00 AM", or "sunset (8:10 PM)" — the
+    /// parenthetical is today's time per the daemon, dropped when it has no
+    /// location to compute one.
+    private func timeSummary(_ at: String) -> String {
+        guard let mode = TimeMode(rawValue: at), mode != .clock else {
+            return localizedTime(at)
+        }
+        let resolved = mode == .sunrise
+            ? controller.bridgeConfig?.sunrise
+            : controller.bridgeConfig?.sunset
+        guard let resolved else { return at }
+        return "\(at) (\(localizedTime(resolved)))"
+    }
+
     /// The daemon's "HH:MM" rendered in the machine's locale (e.g. "7:00 AM"
-    /// in a 12-hour locale, "07:00" in a 24-hour one).
+    /// in a 12-hour locale, "07:00" in a 24-hour one); non-times pass
+    /// through unchanged.
     private func localizedTime(_ at: String) -> String {
         let parts = at.split(separator: ":").compactMap { Int($0) }
         guard parts.count == 2,
@@ -154,19 +196,29 @@ struct SchedulesView: View {
         return VStack(alignment: .leading, spacing: 10) {
             Text(binding.wrappedValue.key == nil ? "NEW SCHEDULE" : "EDIT SCHEDULE")
                 .font(.caption).foregroundStyle(.secondary)
-            // Scene and times share a row: the time field right-aligns its
-            // digits within a two-digit-wide box, so mid-row (after the
-            // popup) its ragged left edge doesn't read as misalignment.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // Scene and time mode share the first row; the mode chips echo
+            // the day chips below so the editor speaks one visual language.
+            HStack(spacing: 6) {
                 Picker("", selection: binding.scene) {
                     ForEach(controller.scenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
                 }
                 .labelsHidden()
                 .fixedSize()
-                timeField(binding)
-                if let ends = endTimeText(binding.wrappedValue) {
-                    Text("to").foregroundStyle(.secondary)
-                    Text(ends).foregroundStyle(.secondary)
+                ForEach(TimeMode.allCases, id: \.self) { mode in
+                    modeChip(mode, binding: binding)
+                }
+            }
+            // Only a wall-clock schedule needs a time input; sunrise/sunset
+            // carry their own. The time field right-aligns its digits within
+            // a two-digit-wide box, so its ragged left edge doesn't read as
+            // misalignment.
+            if binding.wrappedValue.mode == .clock {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    timeField(binding)
+                    if let ends = endTimeText(binding.wrappedValue) {
+                        Text("to").foregroundStyle(.secondary)
+                        Text(ends).foregroundStyle(.secondary)
+                    }
                 }
             }
             HStack(spacing: 4) {
@@ -304,6 +356,21 @@ struct SchedulesView: View {
     }
     #endif
 
+    private func modeChip(_ mode: TimeMode, binding: Binding<EditState>) -> some View {
+        let selected = binding.wrappedValue.mode == mode
+        return Button {
+            binding.wrappedValue.mode = mode
+        } label: {
+            Image(systemName: mode.symbol)
+                .font(.caption2)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(selected ? Color.accentColor : Color.primary.opacity(0.1)))
+                .foregroundStyle(selected ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .help(mode.help)
+    }
+
     private func dayToggle(_ day: String, binding: Binding<EditState>) -> some View {
         let selected = binding.wrappedValue.days.contains(day)
         return Button {
@@ -323,18 +390,25 @@ struct SchedulesView: View {
     private func editState(forKey key: String, schedule: Schedule) -> EditState {
         var state = EditState(key: key, scene: schedule.scene)
         state.days = Set(schedule.days)
-        let parts = schedule.at.split(separator: ":").compactMap { Int($0) }
-        if parts.count == 2 {
-            state.hour = parts[0]
-            state.minute = parts[1]
+        if let mode = TimeMode(rawValue: schedule.at) {
+            state.mode = mode
+        } else {
+            let parts = schedule.at.split(separator: ":").compactMap { Int($0) }
+            if parts.count == 2 {
+                state.hour = parts[0]
+                state.minute = parts[1]
+            }
         }
         return state
     }
 
     private func saveEdit() async {
         guard let state = editing else { return }
+        let at = state.mode == .clock
+            ? String(format: "%02d:%02d", state.hour, state.minute)
+            : state.mode.rawValue
         let schedule = Schedule(
-            at: String(format: "%02d:%02d", state.hour, state.minute),
+            at: at,
             days: dayOrder.filter(state.days.contains),
             scene: state.scene)
         if let error = await controller.save(schedule: schedule,

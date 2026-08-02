@@ -26,7 +26,7 @@ through synchronously and patch the cache optimistically.
 | `DELETE /scenes/<name>` | **409** while a schedule references it |
 | `POST /scenes/<name>/run` | run now (the scene says which lights) |
 | `GET /schedules` | `{"schedules": {name: {at, days, on?, scene, enabled}}}` |
-| `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist) |
+| `PUT /schedules/<name>` | upsert; validated (time, days, scene must exist; `sunrise`/`sunset` need a configured location) |
 | `DELETE /schedules/<name>` | |
 | `GET /groups` | `{"groups": {id: {name, lights}}}` — daemon-authoritative rooms (may be empty; served even with the bridge down) |
 | `POST /groups` | `{name, lights}` (lights may be `[]`) → `{"ok": true, "id": id}` |
@@ -41,7 +41,7 @@ until a light returns); mirroring is best-effort and never fails a room
 operation. On first run, existing bridge groups are imported once.
 | `GET /status` | `{"running": null \| {scene, schedule?, targets, started, ends}}` |
 | `POST /stop` | `{"stopped": name \| null}` — release manual control |
-| `GET /config` | `{"bridgeIP": override \| null, "activeIP", "bridgeReachable"}` |
+| `GET /config` | `{"bridgeIP": override \| null, "activeIP", "bridgeReachable", "sunrise", "sunset"}` — the solar fields are today's `"HH:MM"` (box-local), `null` without a configured location |
 | `PUT /config` | `{"bridgeIP": "10.0.0.5" \| null}` — null = auto (mDNS); probed before committing, persisted to config.env |
 
 `level` is device brightness independent of `on`; clients express "off" as
@@ -56,9 +56,12 @@ are seeded on first contact with the bridge, instantiated per light with
 huectl's field-tested keyframes — stored in `~/.config/lumen/scenes.json`
 and editable like any user scene.
 
-**Schedules** are time-only: fire a scene at `at` (`"HH:MM"`, box-local) on
-`days` (`["mon"..."sun"]`) or once on a date (`on: "YYYY-MM-DD"`,
-self-deleting). Stored in `~/.config/lumen/schedules.json`.
+**Schedules** are time-only: fire a scene at `at` on `days`
+(`["mon"..."sun"]`) or once on a date (`on: "YYYY-MM-DD"`, self-deleting).
+`at` is `"HH:MM"` (box-local) or the literals `"sunrise"`/`"sunset"`,
+resolved daily from the configured `LATITUDE`/`LONGITUDE` — pure local math
+(NOAA, via the `sunrise` crate), no network. Solar schedules lie dormant if
+the location is removed. Stored in `~/.config/lumen/schedules.json`.
 
 **Arbitration** is schedule-wins, uniformly: while a timed scene runs it owns
 its targets — manual writes to them 409, new scene runs 409, and scheduled
@@ -73,6 +76,8 @@ An instant (0-duration) scene releases as soon as its write lands.
 API_KEY="your-hue-api-key"
 # BRIDGE_IP="10.0.0.5"   # optional; auto-discovered via mDNS if unset,
                          # and rediscovered when the cached IP stops answering
+# LATITUDE="37.43"       # optional; enables sunrise/sunset schedules
+# LONGITUDE="-122.17"    # (two decimals ≈ 1 km — plenty for sun times)
 ```
 
 `BRIDGE_IP` is also settable at runtime via `PUT /config` (the app's settings

@@ -22,10 +22,12 @@
 //!   POST   /scenes/{name}/rename  <- {"to": name} — also repoints every
 //!                                 schedule that references the scene
 //!
-//! Schedules (time-only: fire a scene at a time on chosen days):
+//! Schedules (time-only: fire a scene at a time on chosen days; `at` is
+//! "HH:MM" or the literals "sunrise"/"sunset"):
 //!   GET    /schedules          -> {"schedules": {name: {at, days, on?,
 //!                                 scene, enabled}}}
-//!   PUT    /schedules/{name}   <- upsert, validated (scene must exist)
+//!   PUT    /schedules/{name}   <- upsert, validated (scene must exist;
+//!                                 solar times need a configured location)
 //!   DELETE /schedules/{name}
 //!
 //! Runs:
@@ -47,7 +49,9 @@
 //!
 //! Config:
 //!   GET /config            -> {"bridgeIP": override | null, "activeIP":
-//!                              in-use address | null, "bridgeReachable"}
+//!                              in-use address | null, "bridgeReachable",
+//!                              "sunrise": today's "HH:MM" | null,
+//!                              "sunset": today's "HH:MM" | null}
 //!   PUT /config            <- {"bridgeIP": "10.0.0.5" | null} — null/empty
 //!                              = auto (mDNS); probed before committing, then
 //!                              persisted to config.env
@@ -84,6 +88,9 @@ pub struct AppState {
     pub scenes: Arc<Store<Scene>>,
     pub schedules: Arc<Store<Schedule>>,
     pub rooms: Arc<Rooms>,
+    /// The box's location from config.env, fixed for the daemon's lifetime;
+    /// solar schedules are refused while it's unset.
+    pub location: Option<sunrise::Coordinates>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -312,6 +319,12 @@ async fn put_schedule(
     if let Err(e) = schedule.validate() {
         return error(StatusCode::BAD_REQUEST, &e);
     }
+    if schedule.is_solar() && state.location.is_none() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "sunrise/sunset schedules need LATITUDE/LONGITUDE in the daemon's config.env",
+        );
+    }
     if state.scenes.get(&schedule.scene).await.is_none() {
         return error(
             StatusCode::BAD_REQUEST,
@@ -532,12 +545,22 @@ async fn delete_group(State(state): State<AppState>, Path(group_id): Path<String
 
 async fn get_config(State(state): State<AppState>) -> ApiResponse {
     let (configured, active) = state.bridge.ip_state().await;
+    // Today's solar times, box-local, in the same "HH:MM" shape `at` uses;
+    // null without a location (or during polar day/night). Display-only —
+    // clients resolve "sunset" rows against these.
+    let now = chrono::Local::now();
+    let solar = |event| {
+        crate::scheduler::solar_time(state.location, event, &now)
+            .map(|(hour, minute)| format!("{hour:02}:{minute:02}"))
+    };
     (
         StatusCode::OK,
         Json(json!({
             "bridgeIP": configured,
             "activeIP": active,
             "bridgeReachable": state.cache.snapshot().await.is_some(),
+            "sunrise": solar(sunrise::SolarEvent::Sunrise),
+            "sunset": solar(sunrise::SolarEvent::Sunset),
         })),
     )
 }
