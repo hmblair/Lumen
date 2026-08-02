@@ -462,7 +462,10 @@ fn denormalize(state: &StateUpdate) -> Value {
         body.insert("sat".into(), json!(((sat * 254.0).round() as i64).clamp(0, 254)));
     }
     if let Some(level) = state.level {
-        // 1 is the floor: clients express "off" as {"on": false}, never level 0.
+        // 1 is the floor (the bridge's own minimum). Off writes carry level 0
+        // alongside {"on": false} — the bridge accepts bri in the same
+        // command — so its stored brightness is floored too and can't
+        // resurface as a stale 100% via the vendor app's toggle.
         body.insert("bri".into(), json!(((level * 254.0).round() as i64).clamp(1, 254)));
     }
     if let Some(transition) = state.transition {

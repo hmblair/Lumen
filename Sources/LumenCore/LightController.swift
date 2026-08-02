@@ -323,20 +323,23 @@ public final class LightController: ObservableObject {
 
     /// Brightness in 0...1 is the single power+level control: 0 turns lights off,
     /// any positive value turns them on at the mapped level. A light is off iff
-    /// its brightness is 0 — no brightness is remembered across off.
+    /// its brightness is 0 — no brightness is remembered across off. One code
+    /// path: the level is always sent and `on` derived from it, so "off" also
+    /// writes level 0 (the daemon floors it to the bridge's minimum) and the
+    /// bridge never keeps a stale brightness behind Lumen's back.
     public func applyBrightness(_ value: Double) {
         let ids = targets
-        let isOff = value <= 0
+        let isOn = value > 0
         updateLocal(ids) {
-            if isOff { $0.on = false } else { $0.on = true; $0.level = value }
+            $0.on = isOn
+            $0.level = value
         }
 
         briTask?.cancel()
         briTask = Task {
             try? await Task.sleep(nanoseconds: 60_000_000)
             if Task.isCancelled { return }
-            let body: [String: Any] = isOff ? ["on": false] : ["on": true, "level": value]
-            await send(body, to: ids)
+            await send(["on": isOn, "level": value], to: ids)
         }
     }
 

@@ -86,7 +86,18 @@ impl LightCache {
         members: &[String],
         state: &StateUpdate,
     ) -> Result<(), BridgeError> {
-        self.bridge.apply_state_to_group(bridge_group_id, state).await?;
+        // Off writes carry a level so the bridge's stored brightness is
+        // floored along with the power ("off remembers nothing"). The group
+        // action silently drops bri for off members — only per-light writes
+        // store it — so this one shape fans out; turning off in a burst of
+        // per-light commands is visually indistinguishable from lockstep.
+        if state.on == Some(false) && state.level.is_some() {
+            for member in members {
+                self.bridge.apply_state(member, state).await?;
+            }
+        } else {
+            self.bridge.apply_state_to_group(bridge_group_id, state).await?;
+        }
         {
             let mut guard = self.inner.write().await;
             if let Some((lights, _)) = guard.as_mut() {
