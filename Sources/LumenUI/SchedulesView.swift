@@ -49,11 +49,7 @@ struct SchedulesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            ErrorBanner(message: $errorMessage)
             if editing != nil {
                 editor
             } else {
@@ -71,6 +67,9 @@ struct SchedulesView: View {
                 Text("SCHEDULES").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button {
+                    // Entering the editor is a scope change: whatever failed
+                    // before doesn't apply to a fresh form.
+                    errorMessage = nil
                     editing = EditState(scene: defaultSceneName)
                 } label: {
                     Image(systemName: "plus")
@@ -111,6 +110,7 @@ struct SchedulesView: View {
             .opacity(schedule.enabled ? 1 : 0.5)
             Spacer()
             Button {
+                errorMessage = nil
                 editing = editState(forKey: name, schedule: schedule)
             } label: {
                 Image(systemName: "pencil")
@@ -175,7 +175,10 @@ struct SchedulesView: View {
                 }
             }
             HStack {
-                Button("Cancel") { editing = nil }
+                Button("Cancel") {
+                    errorMessage = nil
+                    editing = nil
+                }
                 Spacer()
                 Button("Save") { Task { await saveEdit() } }
                     .keyboardShortcut(.defaultAction)

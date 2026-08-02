@@ -114,9 +114,7 @@ struct SceneEditorView: View {
                 Text(originalName == nil ? "NEW SCENE" : "EDIT SCENE")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(.orange)
-                }
+                ErrorBanner(message: $errorMessage)
             }
             HStack {
                 TextField("Name", text: $draft.name)

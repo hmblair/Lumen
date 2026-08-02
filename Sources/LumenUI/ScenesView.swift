@@ -21,11 +21,7 @@ struct ScenesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            ErrorBanner(message: $errorMessage)
             HStack {
                 Text("SCENES").font(.caption).foregroundStyle(.secondary)
                 Spacer()
