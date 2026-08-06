@@ -584,6 +584,10 @@ private struct CurveCanvas: View {
     var onScrub: (Double?) -> Void
 
     @State private var scrubT: Double?
+    /// The dragged point's (t, level) at grab time. Dot drags apply the
+    /// gesture's translation to this origin rather than jumping to the
+    /// cursor, so a bare click selects without moving the point.
+    @State private var dragOrigin: (t: Double, level: Double)?
 
     private let dotSize: CGFloat = 14
 
@@ -731,21 +735,29 @@ private struct CurveCanvas: View {
                         // Selecting a point selects its curve.
                         selectedGroup = g
                         selectedPoint = i
-                        movePoint(group: g, point: i, to: drag.location, in: rect)
+                        let origin = dragOrigin
+                            ?? (groups[g].points[i].t, groups[g].points[i].level)
+                        dragOrigin = origin
+                        movePoint(group: g, point: i, from: origin,
+                                  by: drag.translation, in: rect)
                     }
+                    .onEnded { _ in dragOrigin = nil }
             )
     }
 
-    private func movePoint(group g: Int, point i: Int, to location: CGPoint, in rect: CGRect) {
+    private func movePoint(group g: Int, point i: Int,
+                           from origin: (t: Double, level: Double),
+                           by translation: CGSize, in rect: CGRect) {
         // Keep t strictly between the neighbors so points stay ordered and
         // never coincide (the daemon rejects duplicate times).
         let points = groups[g].points
         let gap = 0.01
         let lower = i > 0 ? points[i - 1].t + gap : 0
         let upper = i < points.count - 1 ? points[i + 1].t - gap : 1
-        let (t, level) = value(at: location, in: rect)
-        groups[g].points[i].t = min(max(t, lower), upper)
-        groups[g].points[i].level = level
+        let t = origin.t + translation.width / rect.width
+        let level = origin.level - translation.height / rect.height
+        groups[g].points[i].t = min(max(t, max(lower, 0)), min(upper, 1))
+        groups[g].points[i].level = min(max(level, 0), 1)
     }
 
     private func addPoint(at location: CGPoint, in rect: CGRect) {
