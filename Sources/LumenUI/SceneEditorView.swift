@@ -246,10 +246,8 @@ struct SceneEditorView: View {
     @ViewBuilder private var pointInspector: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("POINT COLOR").font(.caption2).foregroundStyle(.secondary)
-            ColorWheel(hue: selectedPointHue, saturation: selectedPointSaturation) {}
-                .frame(width: 110, height: 110)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
-                .opacity(draft.selectedPoint == nil ? 0.3 : 1)
+            ResettableColorWheel(hue: selectedPointHue, saturation: selectedPointSaturation,
+                                 diameter: 110) {}
                 .disabled(draft.selectedPoint == nil)
             HStack {
                 Button {

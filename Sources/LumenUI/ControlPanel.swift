@@ -210,30 +210,8 @@ public struct ControlPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            ColorWheel(hue: $hue, saturation: $saturation) {
+            ResettableColorWheel(hue: $hue, saturation: $saturation, diameter: 210) {
                 controller.applyColor(hue: hue, saturation: saturation)
-            }
-            .frame(width: 210, height: 210)
-            .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
-            // Dim the wheel itself here; the drop button below dims via its
-            // own style's disabled treatment (dimming after the overlay
-            // stacked both, greying the button twice).
-            .opacity(colorEnabled ? 1 : 0.35)
-            .overlay(alignment: .bottomTrailing) {
-                // White is the center of the HS wheel (saturation 0).
-                Button {
-                    saturation = 0
-                    controller.applyColor(hue: hue, saturation: 0)
-                } label: {
-                    Image(systemName: "drop.halffull")
-                        // 1.25x the standard 13pt icon size.
-                        .font(.system(size: 16.25))
-                }
-                .buttonStyle(HoverIconButtonStyle())
-                // Pull in from the frame's corner toward the circle's edge —
-                // the corner of the square sits well outside the wheel.
-                .offset(x: -8, y: -8)
-                .help("Reset to white")
             }
             .disabled(!colorEnabled)
             .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
