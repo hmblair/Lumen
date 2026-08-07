@@ -132,9 +132,22 @@ public final class LightController: ObservableObject {
     /// *after* the release-restore, leaving lights stuck mid-scrub.
     var editorWriteChain: Task<Void, Never>?
 
+    /// The default session: ephemeral and cache-free. Poll responses are
+    /// per-second state snapshots; the shared session's default caching was
+    /// writing every one of them into the on-disk URL cache database, which
+    /// dominated the app's idle CPU (and stale entries there have caused
+    /// routing confusion before).
+    nonisolated public static let uncachedSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
     /// Inject `session`/`defaults` so both apps — and tests — can point at any
     /// source or a stub without touching this type.
-    public init(session: URLSession = .shared, defaults: UserDefaults = .standard) {
+    public init(session: URLSession = LightController.uncachedSession,
+                defaults: UserDefaults = .standard) {
         self.session = session
         self.defaults = defaults
         if let stored = defaults.string(forKey: baseURLKey), let url = URL(string: stored) {
@@ -243,8 +256,12 @@ public final class LightController: ObservableObject {
             let parsed = try JSONDecoder().decode(LightsResponse.self, from: data).lights
             await refreshStatus()
             failedPolls = 0
-            isReachable = true
-            lastError = nil
+            // @Published fires on every assignment, changed or not, and this
+            // path runs once a second — so steady-state polls must not touch
+            // published state, or the whole UI (and the menu bar icon's
+            // observer) re-renders at 1 Hz for nothing.
+            if !isReachable { isReachable = true }
+            if lastError != nil { lastError = nil }
             // Continuous adoption: every poll takes the daemon's state, so a
             // change made anywhere (another device, a scene, curl) shows up
             // here within a poll — except lights this client wrote within the
@@ -262,7 +279,7 @@ public final class LightController: ObservableObject {
                 .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
             lastLocalWrite = lastLocalWrite.filter { now.timeIntervalSince($0.value) < writeGuardWindow }
             let changed = merged != lights
-            lights = merged
+            if changed { lights = merged }
             // Default the selection to all lights only on the first sync with
             // a source — a deliberately emptied selection stays empty.
             if !hasSynced {
@@ -290,7 +307,8 @@ public final class LightController: ObservableObject {
         else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let status = try? decoder.decode(StatusResponse.self, from: data) {
+        if let status = try? decoder.decode(StatusResponse.self, from: data),
+           status.running != running {
             running = status.running
         }
     }

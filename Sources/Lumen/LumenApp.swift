@@ -143,12 +143,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         closePanel()
     }
 
+    /// The icon's rendered inputs, cached so a poll that changed nothing
+    /// doesn't rebuild the symbol image and invalidate the status item —
+    /// that ran at 1 Hz and was a measurable share of the app's idle CPU.
+    private var renderedIcon: (reachable: Bool, hue: Double, saturation: Double, brightness: Double)?
+
     /// Update the status item's icon and dim it when the lights are unreachable,
     /// so disconnection reads at a glance even with the panel closed.
     private func updateStatusButton() {
         guard let button = statusItem.button else { return }
-        button.image = statusImage
-        button.alphaValue = controller.isReachable ? 1 : 0.4
+        let light = controller.representative
+        let icon = (controller.isReachable,
+                    light?.hue ?? 0, light?.saturation ?? 0, light?.brightness ?? 0)
+        if renderedIcon == nil || renderedIcon! != icon {
+            renderedIcon = icon
+            button.image = statusImage
+            button.alphaValue = controller.isReachable ? 1 : 0.4
+        }
         // Re-assigning the image clears the button's pressed state, which
         // made the menu-open highlight flash and vanish at the next poll
         // tick; keep it in step with the panel.
