@@ -79,10 +79,11 @@ struct ResettableColorWheel: View {
     var body: some View {
         // 16.25 pt at the main panel's 210 pt wheel, floored at tappable.
         let iconSize = max(11, diameter * 16.25 / 210)
-        // Center the button on the 45° diagonal with its edge kissing the
-        // rim (HoverIconButtonStyle pads ~3 pt around the icon), which also
-        // keeps it just inside the square frame at any diameter.
-        let offset = (diameter / 2 + iconSize / 2 + 4) / 2.0.squareRoot()
+        // Center the button on the 45° diagonal, clear of the rim by 7 pt
+        // (HoverIconButtonStyle pads ~3 pt around the icon, so ~4 pt of
+        // visual air), which also keeps it inside the square frame at any
+        // diameter.
+        let offset = (diameter / 2 + iconSize / 2 + 7) / 2.0.squareRoot()
         ColorWheel(hue: $hue, saturation: $saturation, onChange: onChange)
             .frame(width: diameter, height: diameter)
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
