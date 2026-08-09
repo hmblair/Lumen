@@ -67,6 +67,11 @@ public final class LightController: ObservableObject {
     /// "scene running" banner and greys out manual control.
     @Published public private(set) var running: RunningInfo?
 
+    /// Whether a UI is on screen — the macOS shell sets it from the panel, iOS
+    /// from the foreground transition. Deliberately unpublished: it gates
+    /// network work, and nothing renders from it.
+    public var isForeground = false
+
     /// Scene, schedule, and group libraries, loaded via loadLibrary() on
     /// panel open and after mutations (set internally by the scenes
     /// extension).
@@ -215,12 +220,16 @@ public final class LightController: ObservableObject {
     /// user action. Each cycle refreshes then sleeps, so a slow (timing-out)
     /// request naturally spaces attempts out. The loop pauses while the machine
     /// sleeps and resumes on wake, since Task.sleep can't fire while frozen.
+    ///
+    /// The generous tolerance lets the kernel coalesce this wakeup with others
+    /// already scheduled instead of arming a timer of its own. Idle wakeups,
+    /// not CPU time, are what a once-a-second loop actually costs.
     public func startPolling(every interval: Duration = .seconds(1)) {
         stopPolling()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(for: interval)
+                try? await Task.sleep(for: interval, tolerance: interval / 2)
             }
         }
     }
@@ -254,7 +263,7 @@ public final class LightController: ObservableObject {
                 throw URLError(.badServerResponse)
             }
             let parsed = try JSONDecoder().decode(LightsResponse.self, from: data).lights
-            await refreshStatus()
+            if needsStatus { await refreshStatus() }
             failedPolls = 0
             // @Published fires on every assignment, changed or not, and this
             // path runs once a second — so steady-state polls must not touch
@@ -295,6 +304,14 @@ public final class LightController: ObservableObject {
             }
         }
     }
+
+    /// Whether a poll should spend a second request on GET /status. `running`
+    /// is only ever rendered on screen (the banner, and the manual-control
+    /// lockout), so with no UI up the request buys nothing — skipping it halves
+    /// the idle request rate. A run already in progress keeps polling either
+    /// way, so `running` clears on its own rather than going stale behind a
+    /// closed panel and flashing a dead banner on reopen.
+    private var needsStatus: Bool { isForeground || running != nil }
 
     /// Update `running` from GET /status. Failures keep the previous value —
     /// a dropped status request shouldn't flicker the banner.

@@ -107,6 +107,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func openPanel() {
         guard let buttonWindow = statusItem.button?.window else { return }
         panelIsOpen = true
+        // Polls only fetch scene status while a UI is up. Refresh on the way in
+        // so an already-running scene banners immediately, not a tick later.
+        controller.isForeground = true
+        Task { await controller.refresh() }
         panel.present(below: buttonWindow.frame)
         // Deferred: applying the highlight inside the click action gets
         // undone a moment later when the button's own mouse tracking ends;
@@ -129,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func closePanel() {
         guard panel.isVisible else { return }
         panelIsOpen = false
+        controller.isForeground = false
         if let monitor = outsideClickMonitor {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
