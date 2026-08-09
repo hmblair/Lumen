@@ -39,6 +39,8 @@ clean:
 	rm -rf "$(APP_DIR)"
 
 # The Linux half lives in daemon/ and is built on the box; see daemon/README.md.
+# Point DAEMON_HOST at whatever `ssh` accepts for that machine.
 daemon-logs:
-	ssh hmblair@ssh.hmblair.com 'XDG_RUNTIME_DIR=/run/user/$$(id -u) \
+	@test -n "$(DAEMON_HOST)" || { echo "Set DAEMON_HOST, e.g. make daemon-logs DAEMON_HOST=user@host"; exit 1; }
+	ssh $(DAEMON_HOST) 'XDG_RUNTIME_DIR=/run/user/$$(id -u) \
 		journalctl --user -u lumen-daemon -n 50 --no-pager'
