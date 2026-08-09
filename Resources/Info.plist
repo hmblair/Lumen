@@ -7,8 +7,10 @@
     <key>CFBundleIdentifier</key><string>com.hmblair.Lumen</string>
     <key>CFBundleExecutable</key><string>Lumen</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <!-- The version to edit by hand, and the only copy of it anywhere. The
+         build stamps CFBundleVersion (commit count) and LumenGitRevision
+         beside it, so a bundle in someone else's hands names its commit. -->
     <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1.0</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

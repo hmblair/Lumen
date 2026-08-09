@@ -90,8 +90,46 @@ test can supply an isolated defaults suite and a stub session.
 | `make run` | run in the terminal (dev) |
 | `make app` (alias `bundle`) | build the `.app` bundle |
 | `make install` | build the bundle and copy it to `/Applications` |
+| `make universal` | one binary carrying both architectures |
+| `make dist` | universal, signed `.dmg` to hand to someone else |
 | `make daemon-logs DAEMON_HOST=user@host` | tail the daemon's journal over ssh |
 | `make clean` | remove build artifacts |
+
+## Distributing
+
+`make dist` produces `.build/dist/Lumen-<version>.dmg`: a drag-to-Applications
+image around a universal build, so one file serves Apple silicon and Intel.
+Local builds (`make app`, `make install`) stay native-only and fast — the
+architectures are built separately and joined with `lipo`, which needs only the
+Command Line Tools, not a full Xcode.
+
+Edit the version in one place, `CFBundleShortVersionString` in
+`Resources/Info.plist`. The build stamps `CFBundleVersion` (the commit count)
+and `LumenGitRevision` beside it, so Get Info shows the version with a build
+number after it and any copy in someone else's hands names the commit it came
+from.
+
+Signing is ad-hoc unless told otherwise, which is all a local build needs.
+Whether that is enough for someone else depends on how the image travels to
+them: the quarantine flag is stamped by the receiving app, so a copy carried on
+a USB stick or over `scp` arrives clean and simply opens, while one that comes
+by browser, AirDrop, or Messages arrives quarantined — and an ad-hoc signature
+can't clear that. A quarantined copy opens only after
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Lumen.app
+```
+
+To ship one that just opens, sign with a Developer ID and notarize (store the
+credentials once with `xcrun notarytool store-credentials`):
+
+```sh
+make dist SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+          NOTARY_PROFILE=lumen
+```
+
+That path also enables the hardened runtime, which notarization requires, and
+staples the ticket to the image so it opens offline.
 
 ## Next
 
