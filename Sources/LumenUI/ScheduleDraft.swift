@@ -16,6 +16,8 @@ struct ScheduleDraft {
     var minute = 0
     var days: Set<String> = Set(scheduleDayOrder.prefix(5))
     var scene = "sunrise"
+    /// Carried through a save untouched: editing must not flip the toggle.
+    var enabled = true
 
     init(scene: String) {
         self.scene = scene
@@ -25,6 +27,7 @@ struct ScheduleDraft {
         self.key = key
         self.scene = schedule.scene
         self.days = Set(schedule.days)
+        self.enabled = schedule.enabled
         if let mode = ScheduleTimeMode(rawValue: schedule.at) {
             self.mode = mode
         } else {
@@ -43,7 +46,8 @@ struct ScheduleDraft {
 
     /// The wire schedule this draft describes.
     var built: Schedule {
-        Schedule(at: atString, days: scheduleDayOrder.filter(days.contains), scene: scene)
+        Schedule(at: atString, days: scheduleDayOrder.filter(days.contains),
+                 scene: scene, enabled: enabled)
     }
 
     /// The key to save under: the existing one, or a fresh id for a new
