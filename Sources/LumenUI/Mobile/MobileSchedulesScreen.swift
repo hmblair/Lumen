@@ -142,12 +142,16 @@ private struct MobileScheduleForm: View {
                 }
             }
             .pickerStyle(.segmented)
-            if draft.mode == .clock {
-                let sentence = draft.timeSentence(scenes: controller.scenes)
+            if let sentence = draft.timeSentence(scenes: controller.scenes,
+                                                 config: controller.bridgeConfig) {
                 HStack(spacing: 8) {
                     Text(sentence.lead)
-                    DatePicker("Start", selection: timeBinding, displayedComponents: .hourAndMinute)
-                        .labelsHidden()
+                    if let start = sentence.start {
+                        Text(start)
+                    } else {
+                        DatePicker("Start", selection: timeBinding, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                    }
                     if let end = sentence.end {
                         Text(end)
                             .foregroundStyle(.secondary)

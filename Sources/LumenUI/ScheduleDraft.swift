@@ -50,20 +50,35 @@ struct ScheduleDraft {
     /// schedule.
     var saveKey: String { key ?? UUID().uuidString }
 
-    /// The words around the time picker, so both platforms phrase the row
-    /// identically: "From [time] to 7:30 AM" when the selected scene has a
-    /// duration (noting a wrap past midnight), "At [time]" when it applies
-    /// instantly. Clock mode only — a solar start has no fixed clock time.
-    func timeSentence(scenes: [String: Scene]) -> (lead: String, end: String?) {
-        guard mode == .clock,
-              let scene = scenes[scene], scene.duration > 0,
-              let start = Calendar.current.date(bySettingHour: hour, minute: minute,
-                                                second: 0, of: Date())
-        else { return ("At", nil) }
-        let end = start.addingTimeInterval(scene.duration)
-        let wrapped = !Calendar.current.isDate(end, inSameDayAs: start)
+    /// Everything the editor's time row shows, so both platforms phrase it
+    /// identically and neither inspects the mode: "From [start] to 7:30 AM"
+    /// when the selected scene has a duration (noting a wrap past midnight),
+    /// "At [start]" when it applies instantly. In clock mode `start` is nil
+    /// and the view puts its time picker there; in solar modes it is today's
+    /// sunrise/sunset per the daemon. Nil hides the row entirely — a solar
+    /// mode whose daemon has no location to compute times from.
+    func timeSentence(scenes: [String: Scene],
+                      config: BridgeConfig?) -> (lead: String, start: String?, end: String?)? {
+        let startText: String?
+        let startDate: Date?
+        switch mode {
+        case .clock:
+            startText = nil
+            startDate = Calendar.current.date(bySettingHour: hour, minute: minute,
+                                              second: 0, of: Date())
+        case .sunrise, .sunset:
+            let at = mode == .sunrise ? config?.sunrise : config?.sunset
+            guard let at, let date = timeOfDay(at) else { return nil }
+            startText = localizedTime(at)
+            startDate = date
+        }
+        guard let scene = scenes[scene], scene.duration > 0, let startDate else {
+            return ("At", startText, nil)
+        }
+        let end = startDate.addingTimeInterval(scene.duration)
+        let wrapped = !Calendar.current.isDate(end, inSameDayAs: startDate)
         let ends = end.formatted(date: .omitted, time: .shortened) + (wrapped ? " (next day)" : "")
-        return ("From", "to \(ends)")
+        return ("From", startText, "to \(ends)")
     }
 }
 

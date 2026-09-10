@@ -121,15 +121,19 @@ struct SchedulesView: View {
                     modeChip(mode, binding: binding)
                 }
             }
-            // Only a wall-clock schedule needs a time input; sunrise/sunset
-            // carry their own. The time field right-aligns its digits within
-            // a two-digit-wide box, so its ragged left edge doesn't read as
-            // misalignment.
-            if binding.wrappedValue.mode == .clock {
-                let sentence = binding.wrappedValue.timeSentence(scenes: controller.scenes)
+            // The sentence says what the row shows; the picker stands in
+            // wherever it leaves the start open (wall-clock schedules). The
+            // time field right-aligns its digits within a two-digit-wide
+            // box, so its ragged left edge doesn't read as misalignment.
+            if let sentence = binding.wrappedValue.timeSentence(scenes: controller.scenes,
+                                                                config: controller.bridgeConfig) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(sentence.lead)
-                    timeField(binding)
+                    if let start = sentence.start {
+                        Text(start)
+                    } else {
+                        timeField(binding)
+                    }
                     if let end = sentence.end {
                         Text(end).foregroundStyle(.secondary)
                     }

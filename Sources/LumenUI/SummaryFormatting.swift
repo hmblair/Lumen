@@ -92,15 +92,19 @@ func scheduleTimeSummary(_ at: String, config: BridgeConfig?) -> String {
     return "\(at) (\(localizedTime(resolved)))"
 }
 
+/// The daemon's "HH:MM" as that time today; nil for non-times.
+func timeOfDay(_ at: String) -> Date? {
+    let parts = at.split(separator: ":").compactMap { Int($0) }
+    guard parts.count == 2 else { return nil }
+    return Calendar.current.date(bySettingHour: parts[0], minute: parts[1],
+                                 second: 0, of: Date())
+}
+
 /// The daemon's "HH:MM" rendered in the machine's locale (e.g. "7:00 AM"
 /// in a 12-hour locale, "07:00" in a 24-hour one); non-times pass through
 /// unchanged.
 func localizedTime(_ at: String) -> String {
-    let parts = at.split(separator: ":").compactMap { Int($0) }
-    guard parts.count == 2,
-          let date = Calendar.current.date(bySettingHour: parts[0], minute: parts[1],
-                                           second: 0, of: Date())
-    else { return at }
+    guard let date = timeOfDay(at) else { return at }
     return date.formatted(date: .omitted, time: .shortened)
 }
 
