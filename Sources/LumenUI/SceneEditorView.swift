@@ -139,7 +139,7 @@ struct SceneEditorView: View {
                         onScrub: { t in scrub(to: t) })
                 .frame(height: 192)
 
-            HStack(alignment: .top, spacing: 12) {
+            inspectorLayout {
                 pointInspector
                 Divider()
                 lightAssignment
@@ -170,6 +170,16 @@ struct SceneEditorView: View {
         .onDisappear {
             Task { await cleanupPreview() }
         }
+    }
+
+    /// Inspector and light assignment sit side by side in the 420 pt macOS
+    /// panel; a phone is too narrow for that, so they stack there.
+    private var inspectorLayout: AnyLayout {
+        #if os(macOS)
+        AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        #else
+        AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+        #endif
     }
 
     // MARK: - Groups
@@ -208,7 +218,7 @@ struct SceneEditorView: View {
             } label: {
                 Image(systemName: "plus")
             }
-            .buttonStyle(HoverIconButtonStyle())
+            .buttonStyle(IconButtonStyle())
             .help("Add another curve (assign lights to it below)")
             Button {
                 draft.groups.remove(at: draft.selectedGroup)
@@ -217,7 +227,7 @@ struct SceneEditorView: View {
             } label: {
                 Image(systemName: "minus")
             }
-            .buttonStyle(HoverIconButtonStyle())
+            .buttonStyle(IconButtonStyle())
             .disabled(draft.groups.count <= 1)
             .help("Delete the selected curve (its lights are left alone)")
             Spacer()
@@ -258,7 +268,7 @@ struct SceneEditorView: View {
                 } label: {
                     Image(systemName: "minus.circle")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .disabled(draft.selectedPoint == nil || currentPoints.wrappedValue.count <= 1)
                 .help("Delete selected point")
                 Text(draft.selectedPoint == nil
@@ -636,6 +646,10 @@ private struct CurveCanvas: View {
             .highPriorityGesture(SpatialTapGesture(count: 2).onEnded { tap in
                 addPoint(at: tap.location, in: rect)
             })
+            // A normal gesture, not high-priority: the dots are children of
+            // the canvas, and a high-priority scrub here would swallow their
+            // drags. On iOS the sheet's ScrollView takes clearly vertical
+            // drags; scrubbing is horizontal, so the two coexist.
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
@@ -729,7 +743,7 @@ private struct CurveCanvas: View {
             .shadow(radius: 1)
             .opacity(onSelectedCurve ? 1 : 0.65)
             .position(position(point, in: rect))
-            .gesture(
+            .gesture(overridingScroll:
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         // Selecting a point selects its curve.

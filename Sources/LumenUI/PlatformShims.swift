@@ -6,6 +6,19 @@
 import SwiftUI
 
 extension View {
+    /// Attach `gesture` so it wins over an enclosing ScrollView on iOS,
+    /// where scrolling otherwise steals the drag. macOS has no enclosing
+    /// scroll views in this app, so the normal attachment keeps gesture
+    /// precedence there unchanged.
+    @ViewBuilder
+    func gesture(overridingScroll gesture: some Gesture) -> some View {
+        #if os(macOS)
+        self.gesture(gesture)
+        #else
+        highPriorityGesture(gesture)
+        #endif
+    }
+
     /// Run `action` when the user presses Escape. On iOS there is no Escape
     /// key (`onExitCommand` doesn't exist there); tap-outside dismissal
     /// covers the same intent, so this is a no-op.

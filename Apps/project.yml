@@ -1,0 +1,45 @@
+name: Lumen
+options:
+  bundleIdPrefix: com.hmblair
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  Lumen:
+    path: ..
+
+targets:
+  LumeniOS:
+    type: application
+    platform: iOS
+    sources: [iOS]
+    dependencies:
+      - package: Lumen
+        product: LumenUI
+      - package: Lumen
+        product: LumenCore
+    settings:
+      base:
+        PRODUCT_NAME: Lumen
+        PRODUCT_BUNDLE_IDENTIFIER: com.hmblair.lumen
+        CODE_SIGN_STYLE: Automatic
+        # Placeholders for builds outside make; the make targets pass the
+        # version and the build number.
+        MARKETING_VERSION: "0"
+        CURRENT_PROJECT_VERSION: "0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Lumen
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The app uses only HTTPS, which is exempt from export compliance.
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight

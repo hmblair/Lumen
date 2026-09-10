@@ -19,6 +19,9 @@ struct ColorWheel: View {
         GeometryReader { geo in
             let radius = min(geo.size.width, geo.size.height) / 2
             let center = CGPoint(x: radius, y: radius)
+            // The thumb scales with the wheel (20 pt at the classic 210 pt
+            // wheel), floored so it stays visible on small wheels.
+            let thumbSize = max(12, radius * 20 / 105)
 
             ZStack {
                 AngularGradient(gradient: Gradient(colors: ringColors), center: .center)
@@ -31,13 +34,13 @@ struct ColorWheel: View {
 
                 Circle()
                     .fill(Color(hue: hue, saturation: saturation, brightness: 1))
-                    .frame(width: 20, height: 20)
-                    .overlay(Circle().stroke(.white, lineWidth: 3))
+                    .frame(width: thumbSize, height: thumbSize)
+                    .overlay(Circle().stroke(.white, lineWidth: thumbSize * 0.15))
                     .shadow(radius: 1)
                     .position(thumb(center: center, radius: radius))
             }
             .contentShape(Circle())
-            .gesture(
+            .gesture(overridingScroll:
                 DragGesture(minimumDistance: 0)
                     .onChanged { update($0.location, center: center, radius: radius) }
             )
@@ -79,11 +82,16 @@ struct ResettableColorWheel: View {
     var body: some View {
         // 16.25 pt at the main panel's 210 pt wheel, floored at tappable.
         let iconSize = max(11, diameter * 16.25 / 210)
-        // Center the button on the 45° diagonal, clear of the rim by 7 pt
-        // (HoverIconButtonStyle pads ~3 pt around the icon, so ~4 pt of
-        // visual air), which also keeps it inside the square frame at any
-        // diameter.
-        let offset = (diameter / 2 + iconSize / 2 + 7) / 2.0.squareRoot()
+        // Center the button on the 45° diagonal, just clear of the rim. The
+        // button's visual footprint differs per platform: macOS pads the
+        // glyph by ~3 pt for its hover background, iOS wraps it in a fixed
+        // glass circle.
+        #if os(macOS)
+        let buttonRadius = iconSize / 2 + 7
+        #else
+        let buttonRadius = IconButtonStyle.touchDiameter / 2 + 4
+        #endif
+        let offset = (diameter / 2 + buttonRadius) / 2.0.squareRoot()
         ColorWheel(hue: $hue, saturation: $saturation, onChange: onChange)
             .frame(width: diameter, height: diameter)
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
@@ -97,7 +105,7 @@ struct ResettableColorWheel: View {
                     Image(systemName: "drop.halffull")
                         .font(.system(size: iconSize))
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .offset(x: offset, y: offset)
                 .help("Reset to white")
             }

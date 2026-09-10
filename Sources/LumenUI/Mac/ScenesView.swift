@@ -5,6 +5,8 @@
 // schedules (the *when*) live on their own screen.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
+#if os(macOS)
+
 import SwiftUI
 import LumenCore
 
@@ -30,7 +32,7 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("New scene (curve editor)")
             }
             if controller.scenes.isEmpty {
@@ -48,7 +50,7 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .disabled(newSceneName.trimmingCharacters(in: .whitespaces).isEmpty)
                 .help("Save the wheel/slider color as a solid scene")
             }
@@ -62,7 +64,7 @@ struct ScenesView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(name)
-            Text(sceneSummary(scene))
+            Text(sceneSummary(scene, groups: controller.groups))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -74,7 +76,7 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "play.fill")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 // One scene at a time: the running one must finish or be
                 // stopped first (the daemon would 409 anyway).
                 .disabled(controller.running != nil)
@@ -84,45 +86,17 @@ struct ScenesView: View {
                 } label: {
                     Image(systemName: "slider.horizontal.below.sun.max")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Edit in the curve editor")
                 Button {
                     Task { errorMessage = await controller.deleteScene(named: name) }
                 } label: {
                     Image(systemName: "trash")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Delete")
             }
         }
-    }
-
-    /// e.g. "Bedroom, Living room · 60m" — the rooms the scene touches
-    /// (with "+n" for involved lights outside any room), falling back to a
-    /// light count when no rooms are involved.
-    private func sceneSummary(_ scene: LumenCore.Scene) -> String {
-        let sceneLights = Set(scene.lights.keys)
-        let roomNames = controller.groups.values
-            .filter { !sceneLights.isDisjoint(with: $0.lights) }
-            .map(\.name)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        let roomed = Set(controller.groups.values.flatMap(\.lights))
-        let strays = sceneLights.subtracting(roomed).count
-
-        var what: String
-        if roomNames.isEmpty {
-            what = sceneLights.count == 1 ? "1 light" : "\(sceneLights.count) lights"
-        } else {
-            what = roomNames.joined(separator: ", ")
-            if strays > 0 {
-                what += " +\(strays)"
-            }
-        }
-        guard scene.duration > 0 else { return what }
-        let time = scene.duration < 90
-            ? "\(Int(scene.duration))s"
-            : "\(Int((scene.duration / 60).rounded()))m"
-        return "\(what) · \(time)"
     }
 
     /// Capture the wheel/slider color for the currently selected lights (all
@@ -143,3 +117,5 @@ struct ScenesView: View {
         }
     }
 }
+
+#endif

@@ -21,7 +21,7 @@ struct ErrorBanner: View {
                     Image(systemName: "xmark")
                         .font(.caption2)
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Dismiss")
             }
         }

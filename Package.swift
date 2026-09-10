@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Lumen",
-    platforms: [.macOS(.v13), .iOS(.v16)],
+    platforms: [.macOS(.v13), .iOS("26.0")],
     products: [
         // Shared by the macOS app and any future iOS app.
         .library(name: "LumenCore", targets: ["LumenCore"]),

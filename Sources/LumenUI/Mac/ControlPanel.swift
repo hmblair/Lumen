@@ -1,18 +1,16 @@
 // ControlPanel.swift
-// The shared control UI: server setup, light picker, HS color wheel, brightness
-// slider. Cross-platform and provider-neutral — it depends only on
-// LightController and the normalized Light model, never on any vendor detail.
-// Each app supplies its own window/menu-bar shell and, optionally, a Quit action
-// and a login-item control. No fixed frame here; the shell sizes it.
+// The macOS menu-bar panel UI: server setup, light picker, HS color wheel,
+// brightness slider, and the panel's own screen switching. Provider-neutral —
+// it depends only on LightController and the normalized Light model. The iOS
+// app has its own screens (Mobile/); the working state they share with this
+// panel (WheelState, ServerSetupModel) lives in the module root.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
+
+#if os(macOS)
 
 import SwiftUI
 import LumenCore
-#if os(macOS)
 import AppKit
-#else
-import UIKit
-#endif
 
 /// Injected "launch at login" control. The implementation is platform-specific
 /// (macOS uses SMAppService), so LumenUI stays free of ServiceManagement.
@@ -31,12 +29,9 @@ public struct ControlPanel: View {
     private let onQuit: (() -> Void)?
     private let loginItem: LoginItem?
 
-    @State private var hue = 0.08
-    @State private var saturation = 0.6
-    @State private var brightness = 1.0
-    @State private var isSeeding = false
+    @StateObject private var wheel = WheelState()
+    @StateObject private var server = ServerSetupModel()
 
-    @State private var urlText = ""
     @State private var bridgeIPText = ""
     @State private var bridgeStatus: String?
     /// Daemon settings are global — every client shares them — so they sit
@@ -69,10 +64,6 @@ public struct ControlPanel: View {
     /// Bumped on background clicks anywhere in the panel; RoomListView
     /// dismisses its inline edits on change.
     @State private var dismissEditsToken = 0
-    @State private var urlStatus: URLStatus = .none
-    @State private var checkTask: Task<Void, Never>?
-
-    private enum URLStatus { case none, checking, valid, invalid }
 
     /// - Parameters:
     ///   - onQuit: supplied by platforms that can quit (macOS menu bar); pass
@@ -112,7 +103,7 @@ public struct ControlPanel: View {
                 case .scenes:
                     runningBanner
                     ScenesView(controller: controller,
-                               currentColor: { (hue, saturation, brightness) },
+                               currentColor: { wheel.current },
                                onEditScene: { name, scene in
                                    screen = .sceneEditor(SceneEditContext(name: name, scene: scene))
                                })
@@ -121,7 +112,7 @@ public struct ControlPanel: View {
                     SceneEditorView(controller: controller,
                                     originalName: context.name,
                                     original: context.scene,
-                                    currentColor: { (hue, saturation, brightness) },
+                                    currentColor: { wheel.current },
                                     onClose: { screen = .scenes })
                         .id(context.id)   // fresh editor state per open
                 case .schedules:
@@ -142,20 +133,20 @@ public struct ControlPanel: View {
         // it open).
         .onTapGesture { dismissEditsToken &+= 1 }
         .onAppear {
-            urlText = controller.baseURL?.absoluteString ?? ""
+            server.adopt(from: controller)
             // Keep first-run setup on screen so it doesn't jump to controls the
             // moment a valid URL auto-applies; the user leaves via the gear.
             if !controller.isConfigured { screen = .settings }
-            seedFromLiveState()
+            wheel.seed(from: controller)
             // Groups feed the chips on the main screen (scenes/schedules
             // screens reload the library themselves on open).
             Task { await controller.loadLibrary() }
         }
-        .onChange(of: controller.selection) { _ in seedFromLiveState() }
+        .onChange(of: controller.selection) { _ in wheel.seed(from: controller) }
         // Reseed only when the controller adopts fresh state (first load or
         // reconnection); steady-state polls don't bump syncToken, so an edit in
         // progress is never overridden.
-        .onChange(of: controller.syncToken) { _ in seedFromLiveState() }
+        .onChange(of: controller.syncToken) { _ in wheel.seed(from: controller) }
     }
 
     /// While a scene runs, manual control pauses (schedule-wins): the daemon
@@ -210,8 +201,8 @@ public struct ControlPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            ResettableColorWheel(hue: $hue, saturation: $saturation, diameter: 210) {
-                controller.applyColor(hue: hue, saturation: saturation)
+            ResettableColorWheel(hue: $wheel.hue, saturation: $wheel.saturation, diameter: 210) {
+                wheel.colorEdited(controller)
             }
             .disabled(!colorEnabled)
             .frame(maxWidth: .infinity, alignment: .center)   // center within the panel
@@ -230,11 +221,11 @@ public struct ControlPanel: View {
         // and are shared by every client.
         VStack(alignment: .leading, spacing: 8) {
             Text("SERVER URL").font(.caption).foregroundStyle(.secondary)
-            TextField("https://lumen.example.com", text: $urlText)
+            TextField("https://lumen.example.com", text: $server.urlText)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: urlText) { _ in checkURL() }
+                .onChange(of: server.urlText) { _ in server.urlEdited(controller) }
                 .overlay(alignment: .trailing) {
-                    urlStatusIcon.padding(.trailing, 6)
+                    URLStatusIcon(status: server.status).padding(.trailing, 6)
                 }
             if let loginItem {
                 Toggle("Launch at login", isOn: Binding(
@@ -262,15 +253,18 @@ public struct ControlPanel: View {
                     bridgeSetup
                 }
             }
-            if let onQuit {
-                HStack {
-                    Spacer()
+            HStack {
+                Text("Version \(SettingsContent.version)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let onQuit {
                     Button("Quit") { onQuit() }
                         .controlSize(.small)
                 }
             }
         }
-        .onAppear(perform: checkURL)
+        .onAppear { server.urlEdited(controller) }
     }
 
     /// The daemon's bridge address: a status line (in-use address, auto vs
@@ -314,68 +308,6 @@ public struct ControlPanel: View {
         }
     }
 
-    @ViewBuilder private var urlStatusIcon: some View {
-        switch urlStatus {
-        case .none:
-            EmptyView()
-        case .checking:
-            ProgressView().controlSize(.small)
-        case .valid:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .invalid:
-            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-        }
-    }
-
-    /// Auto-apply the field: validate, then probe reachability, driving the
-    /// status indicator (spinner -> tick/cross). A well-formed URL is applied
-    /// even if unreachable, so the server updates as soon as you finish typing.
-    private func checkURL() {
-        checkTask?.cancel()
-        let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { urlStatus = .none; return }
-        guard let url = normalizedURL(from: urlText) else { urlStatus = .invalid; return }
-        urlStatus = .checking
-        checkTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))   // debounce typing
-            if Task.isCancelled { return }
-            controller.baseURL = url
-            let ok = await controller.checkReachable()
-            if Task.isCancelled { return }
-            urlStatus = ok ? .valid : .invalid
-        }
-    }
-
-    /// Accept only a well-formed http(s) URL with a host.
-    private func normalizedURL(from text: String) -> URL? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host != nil
-        else { return nil }
-        return url
-    }
-
-    // MARK: - Seeding
-
-    /// Mirror the wheel and slider onto the representative light's current
-    /// hue/sat/brightness. Runs on open and when the selection changes — never
-    /// mid-drag, so it won't fight the user (we don't refresh on every write).
-    private func seedFromLiveState() {
-        guard let light = controller.representative else { return }
-        hue = light.hue
-        saturation = light.saturation
-        // Only flag a seed when the value actually changes, otherwise onChange
-        // won't fire and the guard would swallow the user's next edit.
-        let newBrightness = light.brightness
-        if newBrightness != brightness {
-            isSeeding = true
-            brightness = newBrightness
-        }
-    }
-
     // MARK: - Sections
 
     private var header: some View {
@@ -413,7 +345,7 @@ public struct ControlPanel: View {
                 } label: {
                     Image(systemName: screen.inScenes ? "xmark" : "paintpalette")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Scenes")
 
                 Button {
@@ -421,27 +353,23 @@ public struct ControlPanel: View {
                 } label: {
                     Image(systemName: screen == .schedules ? "xmark" : "calendar.badge.clock")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Schedules")
 
                 Button {
-                    urlText = controller.baseURL?.absoluteString ?? ""
+                    server.adopt(from: controller)
                     screen = screen == .settings ? .controls : .settings
                 } label: {
                     Image(systemName: screen == .settings ? "xmark" : "gearshape")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Settings")
     }
 
-    /// The platform's headline size (13 pt on macOS, 17 pt on iOS), so the
-    /// provider suffix scales from whatever "Lumen" actually renders at.
+    /// The platform's headline size, so the provider suffix scales from
+    /// whatever "Lumen" actually renders at.
     private var headlinePointSize: CGFloat {
-        #if os(macOS)
         NSFont.preferredFont(forTextStyle: .headline).pointSize
-        #else
-        UIFont.preferredFont(forTextStyle: .headline).pointSize
-        #endif
     }
 
     private var brightnessSlider: some View {
@@ -453,22 +381,21 @@ public struct ControlPanel: View {
                     .foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
-                Button { brightness = 0 } label: {
+                Button { wheel.brightness = 0 } label: {
                     Image(systemName: "sun.min")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Off")
 
-                Slider(value: $brightness, in: 0...1)
-                    .onChange(of: brightness) { _ in
-                        if isSeeding { isSeeding = false; return }
-                        controller.applyBrightness(brightness)
+                Slider(value: $wheel.brightness, in: 0...1)
+                    .onChange(of: wheel.brightness) { _ in
+                        wheel.brightnessEdited(controller)
                     }
 
-                Button { brightness = 1 } label: {
+                Button { wheel.brightness = 1 } label: {
                     Image(systemName: "sun.max.fill")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Full brightness")
             }
         }
@@ -484,3 +411,4 @@ public struct ControlPanel: View {
     }
 }
 
+#endif

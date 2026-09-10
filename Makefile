@@ -1,6 +1,11 @@
 # Lumen — build and packaging.
 # Author: Hamish M. Blair <hmblair@stanford.edu>
 
+# Personal values live in an untracked Makefile.local:
+#   TEAM_ID := <Apple team ID>    # enables iOS code signing
+#   DEVICE  := <device name>      # for ios-install / ios-run
+-include Makefile.local
+
 APP_NAME  := Lumen
 BUILD_DIR := .build
 APP_DIR   := $(BUILD_DIR)/$(APP_NAME).app
@@ -46,7 +51,8 @@ NOTARY_PROFILE ?=
 # for it.
 CODESIGN_FLAGS = $(if $(filter-out -,$(SIGN_IDENTITY)),--options runtime,)
 
-.PHONY: all build release universal run app bundle dist install clean daemon-logs
+.PHONY: all build release universal run app bundle dist install clean daemon-logs \
+	ios ios-project ios-install ios-run require-ios-device
 
 # `dist` stages the binary its prerequisites produce, so the two must not
 # overlap; swift build parallelizes internally either way.
@@ -115,9 +121,47 @@ install: app
 	cp -R "$(APP_DIR)" /Applications/
 	@echo "Installed /Applications/$(APP_NAME).app"
 
+# --- iOS ---------------------------------------------------------------------
+# The iOS app is the shared package behind a thin shell in Apps/iOS. The Xcode
+# project is generated from Apps/project.yml, the one description of the app.
+
+IOS_PROJECT   := Apps/$(APP_NAME).xcodeproj
+IOS_SCHEME    := LumeniOS
+IOS_BUILD_DIR := $(BUILD_DIR)/ios
+IOS_APP       := $(IOS_BUILD_DIR)/Build/Products/Release-iphoneos/$(APP_NAME).app
+IOS_BUNDLE_ID := com.hmblair.lumen
+
+# Signing is optional, so a clone with no Apple account still builds.
+ifeq ($(TEAM_ID),)
+IOS_SIGNING := CODE_SIGNING_ALLOWED=NO
+else
+IOS_SIGNING := -allowProvisioningUpdates DEVELOPMENT_TEAM=$(TEAM_ID)
+endif
+
+ios-project:
+	cd Apps && xcodegen generate
+
+ios: ios-project
+	xcodebuild -project $(IOS_PROJECT) -scheme $(IOS_SCHEME) \
+		-configuration Release -destination 'generic/platform=iOS' \
+		-derivedDataPath $(IOS_BUILD_DIR) \
+		MARKETING_VERSION=$(VERSION) CURRENT_PROJECT_VERSION=$(BUILD_NUMBER) \
+		$(IOS_SIGNING) -quiet build
+
+ios-install: require-ios-device ios
+	xcrun devicectl device install app --device "$(DEVICE)" "$(IOS_APP)"
+	@echo "Installed on $(DEVICE)"
+
+ios-run: ios-install
+	xcrun devicectl device process launch --device "$(DEVICE)" $(IOS_BUNDLE_ID)
+
+require-ios-device:
+	@test -n "$(DEVICE)" || { echo "Set DEVICE in Makefile.local or on the command line."; exit 1; }
+
 clean:
 	swift package clean
 	rm -rf "$(APP_DIR)" "$(DIST_DIR)" "$(dir $(UNIVERSAL_BIN))"
+	rm -rf "$(IOS_PROJECT)" Apps/iOS/Info.plist
 
 # The Linux half lives in daemon/ and is built on the box; see daemon/README.md.
 # Point DAEMON_HOST at whatever `ssh` accepts for that machine.

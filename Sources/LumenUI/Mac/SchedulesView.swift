@@ -4,71 +4,17 @@
 // 280 pt menu-bar panel. Scenes themselves are managed on ScenesView.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
+#if os(macOS)
+
 import SwiftUI
 import LumenCore
-#if os(macOS)
 import AppKit
-#endif
-
-private let dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-
-/// How a schedule names its time, mirroring the daemon's `at` grammar: a
-/// wall-clock "HH:MM", or the literals "sunrise"/"sunset".
-private enum TimeMode: String, CaseIterable {
-    case clock, sunrise, sunset
-
-    var symbol: String {
-        switch self {
-        case .clock: return "clock"
-        case .sunrise: return "sunrise.fill"
-        case .sunset: return "sunset.fill"
-        }
-    }
-
-    var help: String {
-        switch self {
-        case .clock: return "At a time"
-        case .sunrise: return "At sunrise"
-        case .sunset: return "At sunset"
-        }
-    }
-}
-
-/// Day sets with a nicer name than listing the days.
-private let daySetSummaries: [Set<String>: String] = [
-    Set(dayOrder): "daily",
-    Set(dayOrder.prefix(5)): "weekdays",
-    Set(dayOrder.prefix(5)).union(["sat"]): "weekdays sat",
-    Set(dayOrder.prefix(5)).union(["sun"]): "weekdays sun",
-    ["sat", "sun"]: "weekends",
-]
 
 struct SchedulesView: View {
     @ObservedObject var controller: LightController
 
-    @State private var editing: EditState?
+    @State private var editing: ScheduleDraft?
     @State private var errorMessage: String?
-
-    /// The schedule form's working state. Schedules are anonymous in the UI —
-    /// a row is identified by when + what — so the daemon's key is a hidden
-    /// id (UUID for new schedules, whatever key an existing one has). Time is
-    /// kept as hour/minute directly — mirroring the daemon's "HH:MM" —
-    /// because SwiftUI's DatePicker renders as a fixed-size capsule on macOS
-    /// 26 that clips its own text and ignores style/frame modifiers.
-    private struct EditState {
-        var key: String?   // nil = creating
-        var mode: TimeMode = .clock
-        var hour = 7
-        var minute = 0
-        var days: Set<String> = Set(dayOrder.prefix(5))
-        var scene = "sunrise"
-    }
-
-    /// A sensible pre-selection for the editor's scene picker.
-    private var defaultSceneName: String {
-        controller.scenes.keys.contains("sunrise") ? "sunrise"
-            : controller.scenes.keys.sorted().first ?? "sunrise"
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -97,11 +43,11 @@ struct SchedulesView: View {
                     // Entering the editor is a scope change: whatever failed
                     // before doesn't apply to a fresh form.
                     errorMessage = nil
-                    editing = EditState(scene: defaultSceneName)
+                    editing = ScheduleDraft(scene: defaultScheduleScene(controller))
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Add schedule")
             }
             if controller.schedules.isEmpty {
@@ -130,7 +76,7 @@ struct SchedulesView: View {
             // behave) disabled, wedging the schedule off forever.
             VStack(alignment: .leading, spacing: 1) {
                 Text(schedule.scene)
-                Text("\(timeSummary(schedule.at)) · \(daysSummary(schedule))")
+                Text("\(scheduleTimeSummary(schedule.at, config: controller.bridgeConfig)) · \(scheduleDaysSummary(schedule))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -138,53 +84,20 @@ struct SchedulesView: View {
             Spacer()
             Button {
                 errorMessage = nil
-                editing = editState(forKey: name, schedule: schedule)
+                editing = ScheduleDraft(key: name, schedule: schedule)
             } label: {
                 Image(systemName: "pencil")
             }
-            .buttonStyle(HoverIconButtonStyle())
+            .buttonStyle(IconButtonStyle())
             .help("Edit")
             Button {
                 Task { errorMessage = await controller.deleteSchedule(named: name) }
             } label: {
                 Image(systemName: "trash")
             }
-            .buttonStyle(HoverIconButtonStyle())
+            .buttonStyle(IconButtonStyle())
             .help("Delete")
         }
-    }
-
-    /// A row's time text: "7:00 AM", or "sunset (8:10 PM)" — the
-    /// parenthetical is today's time per the daemon, dropped when it has no
-    /// location to compute one.
-    private func timeSummary(_ at: String) -> String {
-        guard let mode = TimeMode(rawValue: at), mode != .clock else {
-            return localizedTime(at)
-        }
-        let resolved = mode == .sunrise
-            ? controller.bridgeConfig?.sunrise
-            : controller.bridgeConfig?.sunset
-        guard let resolved else { return at }
-        return "\(at) (\(localizedTime(resolved)))"
-    }
-
-    /// The daemon's "HH:MM" rendered in the machine's locale (e.g. "7:00 AM"
-    /// in a 12-hour locale, "07:00" in a 24-hour one); non-times pass
-    /// through unchanged.
-    private func localizedTime(_ at: String) -> String {
-        let parts = at.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2,
-              let date = Calendar.current.date(bySettingHour: parts[0], minute: parts[1],
-                                               second: 0, of: Date())
-        else { return at }
-        return date.formatted(date: .omitted, time: .shortened)
-    }
-
-    private func daysSummary(_ schedule: Schedule) -> String {
-        if let date = schedule.on { return date }
-        let days = Set(schedule.days)
-        return daySetSummaries[days]
-            ?? dayOrder.filter(days.contains).joined(separator: " ")
     }
 
     // MARK: - Schedule editor
@@ -204,7 +117,7 @@ struct SchedulesView: View {
                 }
                 .labelsHidden()
                 .fixedSize()
-                ForEach(TimeMode.allCases, id: \.self) { mode in
+                ForEach(ScheduleTimeMode.allCases, id: \.self) { mode in
                     modeChip(mode, binding: binding)
                 }
             }
@@ -222,7 +135,7 @@ struct SchedulesView: View {
                 }
             }
             HStack(spacing: 4) {
-                ForEach(dayOrder, id: \.self) { day in
+                ForEach(scheduleDayOrder, id: \.self) { day in
                     dayToggle(day, binding: binding)
                 }
             }
@@ -241,7 +154,7 @@ struct SchedulesView: View {
 
     /// Start + the selected scene's duration, locale-formatted; nil for
     /// instant (solid) scenes. Notes a wrap past midnight.
-    private func endTimeText(_ state: EditState) -> String? {
+    private func endTimeText(_ state: ScheduleDraft) -> String? {
         guard let scene = controller.scenes[state.scene], scene.duration > 0,
               let start = Calendar.current.date(bySettingHour: state.hour, minute: state.minute,
                                                 second: 0, of: Date())
@@ -255,7 +168,7 @@ struct SchedulesView: View {
     /// on macOS 26 that clips its own text and ignores every adjustment, so
     /// on macOS this is the bare AppKit text-field picker instead — the same
     /// unboxed, stepper-less control Calendar.app uses.
-    @ViewBuilder private func timeField(_ binding: Binding<EditState>) -> some View {
+    @ViewBuilder private func timeField(_ binding: Binding<ScheduleDraft>) -> some View {
         #if os(macOS)
         InlineTimePicker(date: timeBinding(binding))
         #else
@@ -266,7 +179,7 @@ struct SchedulesView: View {
 
     /// Bridge the DatePicker's Date to the edit state's hour/minute (the
     /// daemon's native format — no Date survives past this control).
-    private func timeBinding(_ binding: Binding<EditState>) -> Binding<Date> {
+    private func timeBinding(_ binding: Binding<ScheduleDraft>) -> Binding<Date> {
         Binding<Date>(
             get: {
                 Calendar.current.date(bySettingHour: binding.wrappedValue.hour,
@@ -356,7 +269,7 @@ struct SchedulesView: View {
     }
     #endif
 
-    private func modeChip(_ mode: TimeMode, binding: Binding<EditState>) -> some View {
+    private func modeChip(_ mode: ScheduleTimeMode, binding: Binding<ScheduleDraft>) -> some View {
         let selected = binding.wrappedValue.mode == mode
         return Button {
             binding.wrappedValue.mode = mode
@@ -368,10 +281,10 @@ struct SchedulesView: View {
                 .foregroundStyle(selected ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
-        .help(mode.help)
+        .help(mode.label)
     }
 
-    private func dayToggle(_ day: String, binding: Binding<EditState>) -> some View {
+    private func dayToggle(_ day: String, binding: Binding<ScheduleDraft>) -> some View {
         let selected = binding.wrappedValue.days.contains(day)
         return Button {
             if selected { binding.wrappedValue.days.remove(day) }
@@ -387,32 +300,9 @@ struct SchedulesView: View {
         .help(day)
     }
 
-    private func editState(forKey key: String, schedule: Schedule) -> EditState {
-        var state = EditState(key: key, scene: schedule.scene)
-        state.days = Set(schedule.days)
-        if let mode = TimeMode(rawValue: schedule.at) {
-            state.mode = mode
-        } else {
-            let parts = schedule.at.split(separator: ":").compactMap { Int($0) }
-            if parts.count == 2 {
-                state.hour = parts[0]
-                state.minute = parts[1]
-            }
-        }
-        return state
-    }
-
     private func saveEdit() async {
-        guard let state = editing else { return }
-        let at = state.mode == .clock
-            ? String(format: "%02d:%02d", state.hour, state.minute)
-            : state.mode.rawValue
-        let schedule = Schedule(
-            at: at,
-            days: dayOrder.filter(state.days.contains),
-            scene: state.scene)
-        if let error = await controller.save(schedule: schedule,
-                                             named: state.key ?? UUID().uuidString) {
+        guard let draft = editing else { return }
+        if let error = await controller.save(schedule: draft.built, named: draft.saveKey) {
             errorMessage = error
             return
         }
@@ -421,3 +311,5 @@ struct SchedulesView: View {
     }
 
 }
+
+#endif

@@ -61,22 +61,24 @@ drag in flight.
 | `Lumen` | executable | LumenCore, LumenUI | macOS menu-bar shell |
 
 `LumenCore` holds the model and networking — lights, rooms, scenes, schedules,
-curves — with no UI import. `LumenUI` holds the cross-platform SwiftUI views,
-including the reusable `ControlPanel`. `Lumen` is the composition root and the
-only place AppKit appears. Supporting another light vendor means rewriting the
-daemon's `bridge.rs` and shipping no app update at all.
+curves — with no UI import. `LumenUI` splits into three layers: shared pieces
+at its root (the color wheel, the scene editor, and the working-state models —
+`WheelState`, `ServerSetupModel`, `ScheduleDraft` — plus the summary
+formatting), the macOS menu-bar panel in `Mac/`, and the iOS tab-bar screens
+in `Mobile/`. Each platform composes its own screens from the shared pieces,
+so the two apps can restyle freely without duplicating any logic. `Lumen` is
+the composition root and the only place AppKit appears. Supporting another
+light vendor means rewriting the daemon's `bridge.rs` and shipping no app
+update at all.
 
-An iOS app is a new `@main` plus a window over the same panel:
+The iOS app (`Apps/iOS/LumenMobileApp.swift` over `MobileRootView`) is a native tab-bar app — Lights, Scenes, Schedules, Settings — with the color wheel and brightness slider docked in a glass card while lights are selected. The Xcode project is generated from `Apps/project.yml` by [xcodegen](https://github.com/yonaskolb/XcodeGen). Put your Apple team ID and device name in an untracked `Makefile.local`:
 
-```swift
-@main
-struct LumenMobileApp: App {
-    @StateObject private var controller = LightController()
-    var body: some Scene {
-        WindowGroup { ControlPanel(controller: controller) }  // no onQuit on iOS
-    }
-}
+```make
+TEAM_ID := ABCDE12345
+DEVICE  := My iPhone
 ```
+
+Then `make ios` builds a signed release, `make ios-install` puts it on the device, and `make ios-run` also launches it. The device must be paired for development (connect it once and trust this Mac in Xcode).
 
 `UserDefaults` and `URLSession` are injectable via `LightController.init`, so a
 test can supply an isolated defaults suite and a stub session.
@@ -92,6 +94,9 @@ test can supply an isolated defaults suite and a stub session.
 | `make install` | build the bundle and copy it to `/Applications` |
 | `make universal` | one binary carrying both architectures |
 | `make dist` | universal, signed `.dmg` to hand to someone else |
+| `make ios` | generate the Xcode project and build the signed iOS app |
+| `make ios-install` | build and install on `DEVICE` |
+| `make ios-run` | build, install, and launch on `DEVICE` |
 | `make daemon-logs DAEMON_HOST=user@host` | tail the daemon's journal over ssh |
 | `make clean` | remove build artifacts |
 

@@ -10,6 +10,8 @@
 // between sections (or outside any) to move.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
+#if os(macOS)
+
 import SwiftUI
 import LumenCore
 
@@ -44,7 +46,7 @@ struct RoomListView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("New room")
             }
             if let error = rooms.lastError {
@@ -139,7 +141,7 @@ struct RoomListView: View {
                 } label: {
                     Image(systemName: "minus")
                 }
-                .buttonStyle(HoverIconButtonStyle())
+                .buttonStyle(IconButtonStyle())
                 .help("Remove this room (its lights stay, unassigned)")
             }
             ForEach(members) { light in
@@ -297,3 +299,5 @@ struct RoomListView: View {
         }
     }
 }
+
+#endif
