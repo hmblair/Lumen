@@ -113,7 +113,7 @@ struct SchedulesView: View {
             // the day chips below so the editor speaks one visual language.
             HStack(spacing: 6) {
                 Picker("", selection: binding.scene) {
-                    ForEach(controller.scenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
+                    ForEach(controller.visibleScenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
                 }
                 .labelsHidden()
                 .fixedSize()

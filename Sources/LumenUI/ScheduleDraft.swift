@@ -54,6 +54,6 @@ struct ScheduleDraft {
 /// A sensible pre-selection for a new schedule's scene picker.
 @MainActor
 func defaultScheduleScene(_ controller: LightController) -> String {
-    controller.scenes.keys.contains("sunrise") ? "sunrise"
-        : controller.scenes.keys.sorted().first ?? "sunrise"
+    controller.visibleScenes.keys.contains("sunrise") ? "sunrise"
+        : controller.visibleScenes.keys.sorted().first ?? "sunrise"
 }

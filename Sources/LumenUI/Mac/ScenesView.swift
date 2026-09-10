@@ -35,10 +35,10 @@ struct ScenesView: View {
                 .buttonStyle(IconButtonStyle())
                 .help("New scene (curve editor)")
             }
-            if controller.scenes.isEmpty {
+            if controller.visibleScenes.isEmpty {
                 Text("No scenes yet").font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(controller.scenes.sorted(by: { $0.key < $1.key }), id: \.key) { name, scene in
+            ForEach(controller.visibleScenes.sorted(by: { $0.key < $1.key }), id: \.key) { name, scene in
                 sceneRow(name: name, scene: scene)
             }
             HStack(spacing: 6) {

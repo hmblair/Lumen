@@ -126,7 +126,7 @@ private struct MobileScheduleForm: View {
             Form {
                 Section {
                     Picker("Scene", selection: $draft.scene) {
-                        ForEach(controller.scenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
+                        ForEach(controller.visibleScenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
                     }
                 }
                 Section("When") {
