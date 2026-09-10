@@ -61,6 +61,14 @@ enum ScheduleTimeMode: String, CaseIterable {
         case .sunset: return "At sunset"
         }
     }
+
+    var name: String {
+        switch self {
+        case .clock: return "Time"
+        case .sunrise: return "Sunrise"
+        case .sunset: return "Sunset"
+        }
+    }
 }
 
 /// Day sets with a nicer name than listing the days.

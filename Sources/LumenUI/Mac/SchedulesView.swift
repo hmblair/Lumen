@@ -126,11 +126,12 @@ struct SchedulesView: View {
             // a two-digit-wide box, so its ragged left edge doesn't read as
             // misalignment.
             if binding.wrappedValue.mode == .clock {
+                let sentence = binding.wrappedValue.timeSentence(scenes: controller.scenes)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(sentence.lead)
                     timeField(binding)
-                    if let ends = endTimeText(binding.wrappedValue) {
-                        Text("to").foregroundStyle(.secondary)
-                        Text(ends).foregroundStyle(.secondary)
+                    if let end = sentence.end {
+                        Text(end).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -150,18 +151,6 @@ struct SchedulesView: View {
                     .disabled(binding.wrappedValue.days.isEmpty)
             }
         }
-    }
-
-    /// Start + the selected scene's duration, locale-formatted; nil for
-    /// instant (solid) scenes. Notes a wrap past midnight.
-    private func endTimeText(_ state: ScheduleDraft) -> String? {
-        guard let scene = controller.scenes[state.scene], scene.duration > 0,
-              let start = Calendar.current.date(bySettingHour: state.hour, minute: state.minute,
-                                                second: 0, of: Date())
-        else { return nil }
-        let end = start.addingTimeInterval(scene.duration)
-        let wrapped = !Calendar.current.isDate(end, inSameDayAs: start)
-        return end.formatted(date: .omitted, time: .shortened) + (wrapped ? " (next day)" : "")
     }
 
     /// The time control. SwiftUI's DatePicker renders as a fixed-size capsule

@@ -113,53 +113,72 @@ struct MobileSchedulesScreen: View {
     }
 }
 
-/// The schedule form: scene, time (wall clock or solar), and days.
+/// The schedule form: scene, time (wall clock or solar), and days. Laid
+/// out as a plain stack rather than a Form — the content is a few controls,
+/// not a list — so it has an intrinsic height and the sheet hugs it.
 private struct MobileScheduleForm: View {
     @ObservedObject var controller: LightController
     @State var draft: ScheduleDraft
     var onClose: () -> Void
 
     @State private var errorMessage: String?
+    @State private var contentHeight: CGFloat = 420
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Scene", selection: $draft.scene) {
-                        ForEach(controller.visibleScenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
-                    }
+        VStack(spacing: 24) {
+            Text(draft.key == nil ? "New Schedule" : "Edit Schedule")
+                .font(.headline)
+            HStack {
+                Text("Scene")
+                Spacer()
+                Picker("Scene", selection: $draft.scene) {
+                    ForEach(controller.visibleScenes.keys.sorted(), id: \.self) { Text($0).tag($0) }
                 }
-                Section("When") {
-                    Picker("Time", selection: $draft.mode) {
-                        ForEach(ScheduleTimeMode.allCases, id: \.self) { mode in
-                            Label(mode.label, systemImage: mode.symbol).tag(mode)
-                        }
-                    }
-                    if draft.mode == .clock {
-                        DatePicker("At", selection: timeBinding, displayedComponents: .hourAndMinute)
-                    }
-                    dayCircles
-                }
-                if let errorMessage {
-                    Section {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                    }
+                .labelsHidden()
+            }
+            Picker("Time", selection: $draft.mode) {
+                ForEach(ScheduleTimeMode.allCases, id: \.self) { mode in
+                    Text(mode.name).tag(mode)
                 }
             }
-            .navigationTitle(draft.key == nil ? "New Schedule" : "Edit Schedule")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel", role: .cancel) { onClose() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(draft.days.isEmpty)
+            .pickerStyle(.segmented)
+            if draft.mode == .clock {
+                let sentence = draft.timeSentence(scenes: controller.scenes)
+                HStack(spacing: 8) {
+                    Text(sentence.lead)
+                    DatePicker("Start", selection: timeBinding, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                    if let end = sentence.end {
+                        Text(end)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
             }
+            dayCircles
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { onClose() }
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("Save") { Task { await save() } }
+                    .buttonStyle(.glassProminent)
+                    .disabled(draft.days.isEmpty)
+            }
+            .controlSize(.large)
         }
-        .presentationDetents([.medium, .large])
+        .padding(24)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            contentHeight = height
+        }
+        .presentationDetents([.height(contentHeight)])
+        .presentationDragIndicator(.visible)
     }
 
     private var dayCircles: some View {
