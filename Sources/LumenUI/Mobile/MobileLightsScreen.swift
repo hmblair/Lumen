@@ -29,6 +29,8 @@ struct MobileLightsScreen: View {
                     UnconfiguredPlaceholder()
                 }
             }
+            .navigationTitle("Lights")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
