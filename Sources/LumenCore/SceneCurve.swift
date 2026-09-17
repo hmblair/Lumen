@@ -1,7 +1,8 @@
 // SceneCurve.swift
-// Monotone cubic (Fritsch–Carlson) sampling of a scene curve — the exact
-// math the daemon executes (scenes.rs), so what the editor draws is what the
-// lights will do. Smooth, but never overshooting past a keyframe.
+// Monotone cubic (Fritsch–Carlson) sampling of a scene curve in Oklch — the
+// exact math the daemon executes (scenes.rs), so what the editor draws is
+// what the lights will do. Smooth, never overshooting past a keyframe, and
+// evenly paced to the eye.
 // Author: Hamish M. Blair <hmblair@stanford.edu>
 
 import Foundation
@@ -10,18 +11,39 @@ public enum SceneCurve {
 
     /// The interpolated point at timeline position `t` (clamped to the ends).
     /// `points` must be sorted by `t` with no duplicates (as validated and
-    /// stored by the daemon). Hue is circular and takes the short way around
-    /// the wheel (see `unwrapHues`).
+    /// stored by the daemon). Keyframes convert to Oklch, and each of
+    /// lightness, chroma and hue follows its own spline. Hue is circular and
+    /// takes the short way around the wheel (see `unwrapHues`).
     public static func sample(_ points: [ScenePoint], at t: Double) -> ScenePoint {
         let xs = points.map(\.t)
+        let colors = points.map { SceneColor.oklch(hue: $0.hue, saturation: $0.saturation, level: $0.level) }
         func channel(_ ys: [Double]) -> Double {
-            min(1, max(0, interpolate(xs: xs, ys: ys, t: t)))
+            interpolate(xs: xs, ys: ys, t: t)
         }
-        let hue = interpolate(xs: xs, ys: unwrapHues(points), t: t)
+        let hue = channel(unwrapHues(chromaticHues(colors)))
+        let color = SceneColor.Oklch(l: channel(colors.map(\.l)),
+                                     c: max(0, channel(colors.map(\.c))),
+                                     h: hue - floor(hue))   // wrap back into 0...1
+        let hsb = SceneColor.hsb(color)
         return ScenePoint(t: t,
-                          hue: hue - floor(hue),   // wrap back into 0...1
-                          saturation: channel(points.map(\.saturation)),
-                          level: channel(points.map(\.level)))
+                          hue: hsb.hue,
+                          saturation: min(1, max(0, hsb.saturation)),
+                          level: min(1, max(0, hsb.level)))
+    }
+
+    /// The hue of each color, with achromatic colors (greys, black, white)
+    /// taking the hue of the nearest chromatic neighbor — their own hue is
+    /// noise, and a fade from white to orange should hold orange throughout
+    /// rather than sweep the wheel. Mirrors the daemon's `chromatic_hues`.
+    static func chromaticHues(_ colors: [SceneColor.Oklch]) -> [Double] {
+        let first = colors.first { $0.c > SceneColor.achromaticChroma }?.h ?? 0
+        var carried = first
+        return colors.map { color in
+            if color.c > SceneColor.achromaticChroma {
+                carried = color.h
+            }
+            return carried
+        }
     }
 
     /// Hue is a circle (0 and 1 are the same red), but the spline
@@ -29,18 +51,18 @@ public enum SceneCurve {
     /// value by whole turns until it sits within half a turn of its
     /// predecessor. Interpolation then takes the short way around the wheel,
     /// and samples wrap back into 0...1. Mirrors the daemon's `unwrap_hues`.
-    static func unwrapHues(_ points: [ScenePoint]) -> [Double] {
-        var hues: [Double] = []
-        hues.reserveCapacity(points.count)
-        for point in points {
-            var hue = point.hue
-            if let previous = hues.last {
+    static func unwrapHues(_ hues: [Double]) -> [Double] {
+        var unwrapped: [Double] = []
+        unwrapped.reserveCapacity(hues.count)
+        for value in hues {
+            var hue = value
+            if let previous = unwrapped.last {
                 while hue - previous > 0.5 { hue -= 1 }
                 while previous - hue > 0.5 { hue += 1 }
             }
-            hues.append(hue)
+            unwrapped.append(hue)
         }
-        return hues
+        return unwrapped
     }
 
     /// One channel of Fritsch–Carlson. With two points it reduces to linear.

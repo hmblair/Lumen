@@ -1,8 +1,9 @@
 //! Scenes: named per-light color/brightness programs.
 //!
 //! A scene maps each light it touches to a curve: points on a normalized
-//! 0...1 timeline, monotone-cubic interpolated per channel (smooth, no
-//! overshoot past keyframes) and stepped over `duration` seconds. A solid color is a one-point, zero-duration curve; a
+//! 0...1 timeline, monotone-cubic interpolated in Oklch (smooth, no
+//! overshoot past keyframes, evenly paced to the eye) and stepped over
+//! `duration` seconds. A solid color is a one-point, zero-duration curve; a
 //! point with level 0 turns the light off (the app's invariant: a light is
 //! off exactly when its brightness is 0). Lights not in the map are left
 //! alone. A schedule is time-only — everything about *what* happens,
@@ -24,6 +25,7 @@ use tracing::info;
 
 use crate::bridge::StateUpdate;
 use crate::cache::LightCache;
+use crate::color::{hsb_to_oklch, oklch_to_hsb, Oklch, ACHROMATIC_CHROMA};
 use crate::store::Store;
 
 /// Most steps a timed scene is sampled at (huectl's value).
@@ -159,20 +161,41 @@ fn step_due(i: u32, interval: f64, elapsed: Duration) -> Duration {
 }
 
 /// The interpolated frame at timeline position `t` (clamped to the ends).
-/// Each channel follows a monotone cubic spline through the points — smooth,
-/// but never overshooting past a keyframe (a sunrise can't dip darker than
-/// its darkest point). Hue is circular and takes the short way around the
-/// wheel (see `unwrap_hues`). The Swift editor draws the same math
-/// (SceneCurve).
+/// Keyframes convert to Oklch, and each of lightness, chroma and hue
+/// follows a monotone cubic spline through them — smooth, never
+/// overshooting past a keyframe (a sunrise can't dip darker than its
+/// darkest point), and evenly paced to the eye. Hue is circular and takes
+/// the short way around the wheel (see `unwrap_hues`). The Swift editor
+/// draws the same math (SceneCurve).
 fn sample(points: &[Point], t: f64) -> Point {
     let xs: Vec<f64> = points.iter().map(|p| p.t).collect();
+    let colors: Vec<Oklch> = points.iter().map(|p| hsb_to_oklch(p.hue, p.saturation, p.level)).collect();
     let channel = |ys: Vec<f64>| interp_channel(&xs, &ys, t);
-    Point {
-        t,
-        hue: channel(unwrap_hues(points)).rem_euclid(1.0),
-        saturation: channel(points.iter().map(|p| p.saturation).collect()).clamp(0.0, 1.0),
-        level: channel(points.iter().map(|p| p.level).collect()).clamp(0.0, 1.0),
-    }
+    let color = Oklch {
+        l: channel(colors.iter().map(|c| c.l).collect()),
+        c: channel(colors.iter().map(|c| c.c).collect()).max(0.0),
+        h: channel(unwrap_hues(&chromatic_hues(&colors))).rem_euclid(1.0),
+    };
+    let (hue, saturation, level) = oklch_to_hsb(color);
+    Point { t, hue, saturation: saturation.clamp(0.0, 1.0), level: level.clamp(0.0, 1.0) }
+}
+
+/// The hue of each color, with achromatic colors (greys, black, white)
+/// taking the hue of the nearest chromatic neighbor — their own hue is
+/// noise, and a fade from white to orange should hold orange throughout
+/// rather than sweep the wheel.
+fn chromatic_hues(colors: &[Oklch]) -> Vec<f64> {
+    let first = colors.iter().find(|c| c.c > ACHROMATIC_CHROMA).map(|c| c.h).unwrap_or(0.0);
+    let mut carried = first;
+    colors
+        .iter()
+        .map(|color| {
+            if color.c > ACHROMATIC_CHROMA {
+                carried = color.h;
+            }
+            carried
+        })
+        .collect()
 }
 
 /// Hue is a circle (0 and 1 are the same red), but the spline interpolates
@@ -180,12 +203,12 @@ fn sample(points: &[Point], t: f64) -> Point {
 /// turns until it sits within half a turn of its predecessor. Interpolation
 /// then takes the short way around the wheel (0.95 -> 0.05 crosses red, not
 /// the long way through green), and samples wrap back into 0...1.
-fn unwrap_hues(points: &[Point]) -> Vec<f64> {
-    let mut hues: Vec<f64> = Vec::with_capacity(points.len());
-    for point in points {
-        let unwrapped = match hues.last() {
+fn unwrap_hues(hues: &[f64]) -> Vec<f64> {
+    let mut unwrapped: Vec<f64> = Vec::with_capacity(hues.len());
+    for &hue in hues {
+        let shifted = match unwrapped.last() {
             Some(prev) => {
-                let mut hue = point.hue;
+                let mut hue = hue;
                 while hue - prev > 0.5 {
                     hue -= 1.0;
                 }
@@ -194,11 +217,11 @@ fn unwrap_hues(points: &[Point]) -> Vec<f64> {
                 }
                 hue
             }
-            None => point.hue,
+            None => hue,
         };
-        hues.push(unwrapped);
+        unwrapped.push(shifted);
     }
-    hues
+    unwrapped
 }
 
 /// Monotone cubic interpolation (Fritsch–Carlson), one channel. With two
@@ -386,15 +409,40 @@ mod tests {
     }
 
     #[test]
-    fn sample_is_linear_with_two_points_and_clamps() {
-        let scene = one_light(vec![
-            Point { t: 0.0, hue: 0.0, saturation: 1.0, level: 0.0 },
-            Point { t: 0.5, hue: 0.2, saturation: 1.0, level: 1.0 },
-        ]);
+    fn sample_is_linear_in_oklch_with_two_points_and_clamps() {
+        let a = Point { t: 0.0, hue: 0.083, saturation: 0.5, level: 0.3 };
+        let b = Point { t: 0.5, hue: 0.083, saturation: 0.5, level: 1.0 };
+        let scene = one_light(vec![a, b]);
         let mid = sample(&scene.lights["1"], 0.25);
-        assert!((mid.hue - 0.1).abs() < 1e-12);
-        assert!((mid.level - 0.5).abs() < 1e-12);
-        assert_eq!(sample(&scene.lights["1"], 0.9).level, 1.0); // clamped to last point
+        let (start, end) = (hsb_to_oklch(a.hue, a.saturation, a.level), hsb_to_oklch(b.hue, b.saturation, b.level));
+        let got = hsb_to_oklch(mid.hue, mid.saturation, mid.level);
+        assert!((got.l - (start.l + end.l) / 2.0).abs() < 1e-6);
+        assert!((got.c - (start.c + end.c) / 2.0).abs() < 1e-6);
+        assert!((sample(&scene.lights["1"], 0.9).level - 1.0).abs() < 1e-6); // clamped to last point
+    }
+
+    #[test]
+    fn white_to_orange_holds_orange_throughout() {
+        let scene = one_light(vec![
+            Point { t: 0.0, hue: 0.3, saturation: 0.0, level: 1.0 },
+            Point { t: 1.0, hue: 0.083, saturation: 0.7, level: 0.2 },
+        ]);
+        let points = &scene.lights["1"];
+        for i in 1..=20 {
+            let hue = sample(points, i as f64 / 20.0).hue;
+            assert!((hue - 0.083).abs() < 0.01, "sample {i}: hue {hue} drifted");
+        }
+    }
+
+    #[test]
+    fn fade_to_off_ends_exactly_off() {
+        let scene = one_light(vec![
+            Point { t: 0.0, hue: 0.083, saturation: 0.7, level: 0.5 },
+            Point { t: 1.0, hue: 0.0, saturation: 1.0, level: 0.0 },
+        ]);
+        let points = &scene.lights["1"];
+        assert_eq!(sample(points, 1.0).level, 0.0);
+        assert!(sample(points, 0.99).level > 0.0);
     }
 
     #[test]
@@ -403,7 +451,7 @@ mod tests {
         let scene = one_light(vec![p(0.0, 0.0), p(0.4, 1.0), p(0.6, 1.0), p(1.0, 0.2)]);
         let points = &scene.lights["1"];
         for kf in points.iter() {
-            assert!((sample(points, kf.t).level - kf.level).abs() < 1e-12);
+            assert!((sample(points, kf.t).level - kf.level).abs() < 1e-6);
         }
         // Monotone: the plateau between 0.4 and 0.6 stays flat at 1.0 (no
         // bulge above the keyframes), and nothing exceeds the keyframe range.

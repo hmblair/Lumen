@@ -41,7 +41,7 @@ and the daemon's Hue bridge address.
   current color as one, or author a curve in the axis editor: x = time,
   y = brightness, each point carrying its own color. Drag the timeline to try
   it live; **Preview** runs it compressed to 15 s and restores the room after.
-  Curves draw and run as the same monotone cubic splines the daemon executes.
+  Curves draw and run as the same monotone cubic splines in Oklch the daemon executes.
 - **Schedules** (calendar icon) — fire a scene at a wall-clock time, at
   sunrise, or at sunset; on chosen weekdays or once on a date.
 

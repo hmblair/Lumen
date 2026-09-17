@@ -74,7 +74,7 @@ probed before committing and written back to config.env.
 ## Model
 
 **Scenes** carry everything about *what* happens: each light the scene touches
-maps to its own curve — points on a 0...1 timeline, interpolated per channel
+maps to its own curve — points on a 0...1 timeline, interpolated in Oklch
 and stepped over `duration` seconds. A solid color is a one-point,
 zero-duration curve; `level: 0` means off; lights not in the map are left alone
 (several lights sharing a curve simply repeat it). `sunrise`/`sunset` are

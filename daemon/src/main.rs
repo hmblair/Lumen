@@ -8,6 +8,7 @@
 mod api;
 mod bridge;
 mod cache;
+mod color;
 mod config;
 mod rooms;
 mod runner;
