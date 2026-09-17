@@ -262,7 +262,7 @@ async fn run_scene(State(state): State<AppState>, Path(name): Path<String>) -> A
     let Some(scene) = state.scenes.get(&name).await else {
         return error(StatusCode::NOT_FOUND, &format!("no scene named '{name}'"));
     };
-    match state.runner.run(&name, scene, None).await {
+    match state.runner.run(&name, scene, None, chrono::Local::now()).await {
         Ok(()) => ok(),
         Err(running) => error(
             StatusCode::CONFLICT,

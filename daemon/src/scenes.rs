@@ -93,22 +93,25 @@ impl Scene {
     }
 
     /// Run to completion or cancellation, writing through the cache so
-    /// clients polling /lights see the scene's progress.
+    /// clients polling /lights see the scene's progress. `elapsed` is how
+    /// far into the timeline the run starts, so a scene whose window is
+    /// already open joins at the right frame instead of restarting.
     ///
     /// Paced by wall clock: each step sleeps *until* its scheduled moment
     /// rather than sleeping a fixed interval after its writes, so bridge
     /// write latency doesn't stretch the scene past its duration (a 15 s
     /// preview must take 15 s — clients sync UI to that). Steps fade over
     /// one interval, so the curve reads as continuous at any step rate.
-    pub async fn run(self, cache: Arc<LightCache>, cancel: CancellationToken) {
+    pub async fn run(self, cache: Arc<LightCache>, cancel: CancellationToken, elapsed: Duration) {
         if self.duration <= 0.0 {
             self.apply_frame(&cache, 1.0, None).await;
             return;
         }
         let interval = (self.duration / CURVE_STEPS as f64).max(MIN_STEP_SECS);
         let steps = (self.duration / interval).ceil().max(1.0) as u32;
+        let first = first_step(elapsed, interval, steps);
         let start = tokio::time::Instant::now();
-        for i in 0..=steps {
+        for i in first..=steps {
             if cancel.is_cancelled() {
                 return;
             }
@@ -116,12 +119,12 @@ impl Scene {
             // interval visibly interpolated from whatever the lights were
             // doing (a 1h scene took 30s to reach its own starting state).
             // Subsequent frames fade over the interval for smoothness.
-            let fade = if i == 0 { MIN_STEP_SECS } else { interval };
+            let fade = if i == first { MIN_STEP_SECS } else { interval };
             self.apply_frame(&cache, i as f64 / steps as f64, Some(fade)).await;
             if i == steps {
                 return;
             }
-            let target = start + Duration::from_secs_f64(interval * (i + 1) as f64);
+            let target = start + step_due(i + 1, interval, elapsed);
             let cancelled = tokio::select! {
                 _ = cancel.cancelled() => true,
                 _ = tokio::time::sleep_until(target) => false,
@@ -141,6 +144,18 @@ impl Scene {
             }
         }
     }
+}
+
+/// The step a run joins at when `elapsed` of the timeline has already
+/// passed: the last step whose moment is not after `elapsed`.
+fn first_step(elapsed: Duration, interval: f64, steps: u32) -> u32 {
+    ((elapsed.as_secs_f64() / interval).floor() as u32).min(steps)
+}
+
+/// How long after the run starts step `i` is due, given the timeline
+/// already had `elapsed` behind it when the run started.
+fn step_due(i: u32, interval: f64, elapsed: Duration) -> Duration {
+    Duration::from_secs_f64(interval * i as f64).saturating_sub(elapsed)
 }
 
 /// The interpolated frame at timeline position `t` (clamped to the ends).
@@ -323,6 +338,17 @@ mod tests {
         };
         scene.validate().unwrap();
         scene
+    }
+
+    #[test]
+    fn run_joins_a_timeline_part_way_through() {
+        let interval = 30.0;
+        assert_eq!(first_step(Duration::ZERO, interval, 120), 0);
+        assert_eq!(first_step(Duration::from_secs(45), interval, 120), 1);
+        assert_eq!(first_step(Duration::from_secs(60), interval, 120), 2);
+        assert_eq!(first_step(Duration::from_secs(9_000), interval, 120), 120);
+        assert_eq!(step_due(2, interval, Duration::from_secs(45)), Duration::from_secs(15));
+        assert_eq!(step_due(1, interval, Duration::from_secs(45)), Duration::ZERO);
     }
 
     #[test]

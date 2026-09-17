@@ -10,6 +10,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Local, SecondsFormat};
 use serde::{Serialize, Serializer};
@@ -24,6 +25,11 @@ use crate::scenes::Scene;
 /// rejects fractional seconds by default) parses it directly.
 fn rfc3339_secs<S: Serializer>(dt: &DateTime<Local>, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+/// How long ago `started` was; zero when it is not in the past.
+fn elapsed_since(started: DateTime<Local>) -> Duration {
+    (Local::now() - started).to_std().unwrap_or(Duration::ZERO)
 }
 
 /// What /status reports while a scene runs.
@@ -62,19 +68,22 @@ impl SceneRunner {
         }
     }
 
-    /// Start `scene`. A running scene blocks new runs (schedule-wins,
-    /// uniformly: manual light writes and scene starts both defer to it) —
-    /// the Err carries the running scene's name. The scene itself says which
-    /// lights it touches; those are what it owns.
+    /// Start `scene` as if it began at `started`, which may lie in the past:
+    /// the run then joins its timeline part-way through. A running scene
+    /// blocks new runs (schedule-wins, uniformly: manual light writes and
+    /// scene starts both defer to it) — the Err carries the running scene's
+    /// name. The scene itself says which lights it touches; those are what
+    /// it owns.
     pub async fn run(
         self: &Arc<Self>,
         name: &str,
         scene: Scene,
         schedule: Option<String>,
+        started: DateTime<Local>,
     ) -> Result<(), String> {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel = CancellationToken::new();
-        let started = Local::now();
+        let elapsed = elapsed_since(started);
         let ends = started
             + chrono::Duration::from_std(scene.duration()).unwrap_or_else(|_| chrono::Duration::zero());
         let info = RunningInfo {
@@ -97,7 +106,7 @@ impl SceneRunner {
         let runner = Arc::clone(self);
         let cache = Arc::clone(&self.cache);
         tokio::spawn(async move {
-            scene.run(cache, cancel).await;
+            scene.run(cache, cancel, elapsed).await;
             // Release ownership — unless a newer run already replaced us.
             let mut current = runner.current.lock().await;
             if current.as_ref().map(|c| c.generation) == Some(generation) {

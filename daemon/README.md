@@ -87,7 +87,7 @@ like any user scene.
 is `"HH:MM"` (box-local) or the literals `"sunrise"`/`"sunset"`, resolved daily
 from the configured `LATITUDE`/`LONGITUDE` — pure local math (NOAA, via the
 `sunrise` crate), no network. Solar schedules lie dormant if the location is
-removed. Stored in `~/.config/lumen/schedules.json`.
+removed. Stored in `~/.config/lumen/schedules.json`. A schedule is due for the whole window its scene occupies, from `at` until the scene's duration has passed. A schedule added or edited inside that window starts its scene at the matching point of the timeline, and a daemon restart inside the window resumes the scene. Editing a schedule or its scene, or disabling or deleting the schedule, stops the run; while the window is still open the next tick starts the new version at the matching point.
 
 **Rooms** live in `~/.config/lumen/rooms.json` with daemon-generated ids — the
 daemon, not the bridge, is their source of truth. Each room with lights is
@@ -98,8 +98,9 @@ first run, existing bridge groups are imported once.
 
 **Arbitration** is schedule-wins, uniformly: while a timed scene runs it owns
 its targets — manual writes to them 409, new scene runs 409, and scheduled
-fires are skipped with a warning, until the scene finishes or `POST /stop`. An
-instant (0-duration) scene releases as soon as its write lands.
+fires wait, retrying each tick while their window stays open, until the scene
+finishes or `POST /stop`. An instant (0-duration) scene releases as soon as
+its write lands.
 
 ## History
 
